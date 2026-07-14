@@ -222,7 +222,6 @@ Trainly/
   NetworkRequests/          One service per data source
   Views/                    SwiftUI screens and shared UI helpers
   Assets.xcassets/          App icon and carrier logos
-  Test/                     Reference scripts/models for the ticketing flow
 ```
 
 ## Disclaimer

@@ -2,7 +2,7 @@
 //  BigliettiModels.swift
 //  Trainly
 //
-//  Ricerca biglietti Trenitalia (lefrecce BFF). Vedi Test/trenitalia.py.
+//  Ricerca biglietti Trenitalia (lefrecce BFF).
 //
 
 import Foundation
