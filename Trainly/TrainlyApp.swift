@@ -5,13 +5,16 @@
 //  Created by Mattia Meligeni on 12/07/2026.
 //
 
-import SwiftUI
+internal import SwiftUI
 
 @main
 struct TrainlyApp: App {
+    @StateObject private var favorites = FavoritesStore()
+
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            MainTabView()
+                .environmentObject(favorites)
         }
     }
 }
