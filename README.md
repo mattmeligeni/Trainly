@@ -1,3 +1,5 @@
+**English** | [Italiano](README.it.md)
+
 # Trainly
 
 Trainly is a native iOS app for tracking Italian trains and looking up rail travel
@@ -230,3 +232,9 @@ Trainly is an unofficial client and is not affiliated with Trenitalia, Italo,
 Trenord, RFI or the Ministry of Transport. Data is provided as‑is from third‑party
 endpoints and may be inaccurate or unavailable. The ticket feature is for lookup
 only; purchase tickets through official channels or authorized resellers.
+
+## License
+
+This repository is published for portfolio purposes: viewing is allowed, but
+copying, reuse, redistribution and commercial use are not permitted. See
+[LICENSE](LICENSE).
