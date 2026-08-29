@@ -32,8 +32,14 @@ struct InfoView: View {
                     NavigationLink(value: UtilityDestination.biglietti) {
                         card(icon: "ticket.fill",
                              tint: .green,
-                             title: "Cerca Biglietto Trenitalia",
-                             subtitle: "Orari e prezzi dei treni tra due stazioni")
+                             title: "Cerca Biglietti",
+                             subtitle: "Orari e prezzi Trenitalia e Italo")
+                    }
+                    NavigationLink(value: UtilityDestination.bigliettiTrenord) {
+                        card(icon: "tram.fill",
+                             tint: .teal,
+                             title: "Biglietti Trenord",
+                             subtitle: "Orari e prezzi dei treni regionali Trenord")
                     }
                     NavigationLink(value: UtilityDestination.infomobilita) {
                         card(icon: "exclamationmark.bubble.fill",

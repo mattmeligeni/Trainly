@@ -2,7 +2,8 @@
 //  BigliettiView.swift
 //  Trainly
 //
-//  Cerca biglietti Trenitalia: stazioni, data, passeggeri -> soluzioni con prezzi.
+//  Cerca biglietti: un unico form che interroga Trenitalia, Italo e Trenord ->
+//  soluzioni con prezzi, divise per vettore + una vista "Principali" aggregata.
 //
 
 internal import SwiftUI
@@ -20,12 +21,13 @@ struct BigliettiView: View {
 
     @State private var origin: TrenitaliaLocation?
     @State private var destination: TrenitaliaLocation?
-    @State private var date = Calendar.current.date(byAdding: .hour, value: 1, to: Date()) ?? Date()
+    @State private var date = Date()
     @State private var adults = 1
     @State private var children = 0
     @State private var category: CategoryFilter = .tutti
 
-    @State private var solutions: [TicketSolution] = []
+    @State private var trenitaliaSolutions: [TicketSolution] = []
+    @State private var italoSolutions: [TicketSolution] = []
     @State private var isLoading = false
     @State private var errorMessage: String?
     @State private var searched = false
@@ -37,6 +39,10 @@ struct BigliettiView: View {
     private var isMultistation: Bool {
         (origin?.label.localizedCaseInsensitiveContains("Tutte") ?? false)
         || (destination?.label.localizedCaseInsensitiveContains("Tutte") ?? false)
+    }
+
+    private var hasAnyResult: Bool {
+        !trenitaliaSolutions.isEmpty || !italoSolutions.isEmpty
     }
 
     var body: some View {
@@ -55,7 +61,7 @@ struct BigliettiView: View {
                     Button(role: .destructive, action: reset) {
                         Label("Resetta", systemImage: "xmark.circle")
                     }
-                    .disabled(origin == nil && destination == nil && solutions.isEmpty)
+                    .disabled(origin == nil && destination == nil && !hasAnyResult)
                 }
                 .buttonStyle(.borderless)
             }
@@ -69,10 +75,14 @@ struct BigliettiView: View {
                 Stepper("Bambini: \(children)", value: $children, in: 0...9)
             }
 
-            Section("Filtri") {
+            Section {
                 Picker("Categoria", selection: $category) {
                     ForEach(CategoryFilter.allCases) { Text($0.rawValue).tag($0) }
                 }
+            } header: {
+                Text("Filtri")
+            } footer: {
+                Text("La categoria si applica alle soluzioni Trenitalia.")
             }
 
             Section {
@@ -89,16 +99,19 @@ struct BigliettiView: View {
             results
 
             Section {
-                Text("Questa è solo una funzionalità di ricerca di orari e prezzi. Per l'acquisto rivolgiti ai canali ufficiali Trenitalia/Trenord o ai rivenditori autorizzati.")
+                Text("Questa è solo una funzionalità di ricerca di orari e prezzi. Per l'acquisto rivolgiti ai canali ufficiali Trenitalia e Italo o ai rivenditori autorizzati. I treni regionali Trenord hanno una sezione dedicata.")
                     .font(.caption2)
                     .foregroundColor(.secondary)
             }
         }
-        .navigationTitle("Cerca Biglietto")
+        .navigationTitle("Cerca Biglietti")
         .navigationBarTitleDisplayMode(.inline)
+        .onAppear { if !searched { date = Date() } }   // ora corrente finché non si sceglie
         .task { await TrenitaliaStationsStore.shared.refreshIfNeeded() }
         .navigationDestination(isPresented: $showResults) {
-            SolutionsListView(solutions: solutions, showStations: isMultistation)
+            SolutionsListView(trenitalia: trenitaliaSolutions,
+                              italo: italoSolutions,
+                              showStations: isMultistation)
         }
         .sheet(item: $picking) { field in
             StationSearchView(title: field == .origin ? "Stazione di partenza" : "Stazione di arrivo") { loc in
@@ -129,7 +142,7 @@ struct BigliettiView: View {
     private var results: some View {
         if let errorMessage, !isLoading {
             Section { Text(errorMessage).foregroundColor(.secondary) }
-        } else if searched && solutions.isEmpty && !isLoading {
+        } else if searched && !hasAnyResult && !isLoading {
             Section { Text("Nessuna soluzione trovata").foregroundColor(.secondary) }
         }
     }
@@ -137,7 +150,8 @@ struct BigliettiView: View {
     private func reset() {
         origin = nil
         destination = nil
-        solutions = []
+        trenitaliaSolutions = []
+        italoSolutions = []
         searched = false
         errorMessage = nil
     }
@@ -147,66 +161,110 @@ struct BigliettiView: View {
         isLoading = true
         errorMessage = nil
         searched = true
+
+        let originName = o.label
+        let destName = d.label
+        let cat = category
+
         Task {
-            do {
-                solutions = try await BigliettiService.searchSolutions(
-                    fromId: o.id, toId: d.id, date: date,
-                    adults: adults, children: children,
-                    frecceOnly: category == .frecce,
-                    regionalOnly: category == .regionali,
-                    intercityOnly: category == .intercity)
-                if !solutions.isEmpty { showResults = true }   // apre la pagina risultati
-            } catch {
-                solutions = []
-                errorMessage = "Impossibile cercare i biglietti."
+            // Trenitalia (lefrecce): escludiamo le soluzioni di solo Trenord, che
+            // hanno una sezione dedicata.
+            async let trenitalia = Self.searchTrenitalia(
+                fromId: o.id, toId: d.id, date: date,
+                adults: adults, children: children, category: cat)
+
+            async let italo = ItaloTicketService.search(
+                originName: originName, destName: destName, date: date,
+                adults: adults, children: children)
+
+            let (tSols, iSols) = await (trenitalia, italo)
+            trenitaliaSolutions = tSols
+            italoSolutions = iSols
+
+            if hasAnyResult {
+                showResults = true
+            } else {
+                errorMessage = "Nessuna soluzione trovata per questa tratta."
             }
             isLoading = false
         }
+    }
+
+    private static func searchTrenitalia(fromId: Int, toId: Int, date: Date,
+                                         adults: Int, children: Int,
+                                         category: CategoryFilter) async -> [TicketSolution] {
+        do {
+            let sols = try await BigliettiService.searchSolutions(
+                fromId: fromId, toId: toId, date: date,
+                adults: adults, children: children,
+                frecceOnly: category == .frecce,
+                regionalOnly: category == .regionali,
+                intercityOnly: category == .intercity)
+            return sols.filter { !$0.isPureTrenord }
+        } catch {
+            return []
+        }
+    }
+
+    static func hhmm(_ date: Date) -> String {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = TimeZone(identifier: "Europe/Rome")
+        f.dateFormat = "HH:mm"
+        return f.string(from: date)
     }
 }
 
 // MARK: - Lista soluzioni (pagina pushata)
 
-enum OperatorFilter: String, CaseIterable, Identifiable {
-    case tutti = "Tutti", trenitalia = "Trenitalia", trenord = "Trenord"
-    var id: String { rawValue }
-}
-
 struct SolutionsListView: View {
-    let solutions: [TicketSolution]
-    var showStations = false
 
-    @State private var operatorFilter: OperatorFilter = .tutti
-    @State private var onlyDirect = false
+    enum Segment: String, CaseIterable, Identifiable {
+        case principali = "Principali", trenitalia = "Trenitalia", italo = "Italo"
+        var id: String { rawValue }
+    }
 
-    private var filtered: [TicketSolution] {
-        solutions.filter { sol in
-            (!onlyDirect || sol.direct)
-            && (operatorFilter == .tutti
-                || (operatorFilter == .trenord && sol.hasTrenord)
-                || (operatorFilter == .trenitalia && !sol.hasTrenord))
+    let trenitalia: [TicketSolution]
+    let italo: [TicketSolution]
+    let showStations: Bool
+
+    @State private var segment: Segment = .principali
+    @State private var changesFilter: ChangesFilter = .direct
+    @State private var sort: TicketSort = .priceAsc
+
+    private var baseList: [TicketSolution] {
+        switch segment {
+        case .principali: return trenitalia + italo
+        case .trenitalia: return trenitalia
+        case .italo: return italo
         }
+    }
+
+    private var list: [TicketSolution] {
+        baseList.filteredSorted(changes: changesFilter, sort: sort)
     }
 
     var body: some View {
         List {
-            Section("Filtri") {
-                Picker("Operatore", selection: $operatorFilter) {
-                    ForEach(OperatorFilter.allCases) { Text($0.rawValue).tag($0) }
+            Section {
+                Picker("Vettore", selection: $segment) {
+                    ForEach(Segment.allCases) { Text($0.rawValue).tag($0) }
                 }
                 .pickerStyle(.segmented)
-                Toggle("Solo diretti", isOn: $onlyDirect)
+                FilterSortControls(changes: $changesFilter, sort: $sort)
             }
 
-            if filtered.isEmpty {
-                Section { Text("Nessuna soluzione con questi filtri").foregroundColor(.secondary) }
+            if list.isEmpty {
+                Section { Text(emptyMessage).foregroundColor(.secondary) }
             } else {
-                Section("Soluzioni Trenitalia e Trenord") {
-                    ForEach(filtered) { sol in
+                Section {
+                    ForEach(list) { sol in
                         NavigationLink {
                             SolutionDetailView(solution: sol)
                         } label: {
-                            SolutionRow(solution: sol, showStations: showStations)
+                            SolutionRow(solution: sol,
+                                        showStations: showStations && sol.carrier == .trenitalia,
+                                        showCarrier: segment == .principali)
                         }
                     }
                 }
@@ -214,6 +272,29 @@ struct SolutionsListView: View {
         }
         .navigationTitle("Soluzioni")
         .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private var emptyMessage: String {
+        segment == .principali
+            ? "Nessuna soluzione con questi filtri."
+            : "Nessuna soluzione \(segment.rawValue) con questi filtri."
+    }
+}
+
+// MARK: - Barra filtri + ordinamento (condivisa)
+
+struct FilterSortControls: View {
+    @Binding var changes: ChangesFilter
+    @Binding var sort: TicketSort
+
+    var body: some View {
+        Picker("Cambi", selection: $changes) {
+            ForEach(ChangesFilter.allCases) { Text($0.rawValue).tag($0) }
+        }
+        .pickerStyle(.segmented)
+        Picker("Ordina per", selection: $sort) {
+            ForEach(TicketSort.allCases) { Text($0.rawValue).tag($0) }
+        }
     }
 }
 
@@ -266,9 +347,10 @@ func ticketStatusBadge(_ status: String) -> some View {
 
 // MARK: - Riga soluzione
 
-private struct SolutionRow: View {
+struct SolutionRow: View {
     let solution: TicketSolution
     var showStations = false
+    var showCarrier = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -280,6 +362,12 @@ private struct SolutionRow: View {
                     .minimumScaleFactor(0.8)
                 Spacer()
                 ticketStatusBadge(solution.status)
+            }
+
+            if showCarrier {
+                Text(carrierName)
+                    .font(.caption2.weight(.semibold))
+                    .foregroundColor(.secondary)
             }
 
             if showStations {
@@ -311,6 +399,14 @@ private struct SolutionRow: View {
         let parts = solution.trains.map(\.label).filter { !$0.isEmpty }
         return parts.isEmpty ? "\(solution.origin) → \(solution.destination)" : parts.joined(separator: " › ")
     }
+
+    private var carrierName: String {
+        switch solution.carrier {
+        case .trenitalia: return "Trenitalia"
+        case .italo: return "Italo"
+        case .trenord: return "Trenord"
+        }
+    }
 }
 
 // MARK: - Dettaglio soluzione
@@ -331,11 +427,12 @@ struct SolutionDetailView: View {
                 ForEach(solution.trains) { train in
                     HStack(spacing: 10) {
                         TicketTrainLogo(imageName: train.logoImageName)
-                        VStack(alignment: .leading, spacing: 2) {
+                        VStack(alignment: .leading, spacing: 3) {
                             Text(train.label).font(.subheadline.weight(.semibold))
                             Text("\(train.departureStation) \(train.departure) → \(train.arrivalStation) \(train.arrival)")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
+                            trainExtras(train)
                         }
                     }
                 }
@@ -348,23 +445,31 @@ struct SolutionDetailView: View {
                 ForEach(solution.services) { service in
                     DisclosureGroup {
                         ForEach(service.offers) { offer in
-                            HStack {
-                                VStack(alignment: .leading, spacing: 2) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                HStack {
                                     Text(offer.name).font(.subheadline)
-                                    HStack(spacing: 8) {
-                                        if (1...20).contains(offer.seats) {
-                                            Text("\(offer.seats) posti").foregroundColor(.orange)
-                                        }
-                                        Image(systemName: offer.changeable ? "arrow.triangle.2.circlepath" : "lock")
-                                        if offer.refundable { Image(systemName: "eurosign.arrow.circlepath") }
+                                    Spacer()
+                                    if let amount = offer.amount {
+                                        Text(euroString(amount)).font(.subheadline.weight(.semibold))
                                     }
-                                    .font(.caption2)
-                                    .foregroundColor(.secondary)
                                 }
-                                Spacer()
-                                if let amount = offer.amount {
-                                    Text(euroString(amount)).font(.subheadline.weight(.semibold))
+                                // Icone modificabilità/rimborso solo se l'info è disponibile.
+                                HStack(spacing: 8) {
+                                    if (1...20).contains(offer.seats) {
+                                        Text("\(offer.seats) posti").foregroundColor(.orange)
+                                    }
+                                    if let changeable = offer.changeable {
+                                        Image(systemName: changeable ? "arrow.triangle.2.circlepath" : "lock")
+                                    }
+                                    if offer.refundable == true {
+                                        Image(systemName: "eurosign.arrow.circlepath")
+                                    }
+                                    if let detail = offer.detail {
+                                        Text(detail).lineLimit(1).minimumScaleFactor(0.8)
+                                    }
                                 }
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
                             }
                             .padding(.vertical, 1)
                         }
@@ -403,6 +508,39 @@ struct SolutionDetailView: View {
         }
         .navigationTitle("Dettaglio soluzione")
         .navigationBarTitleDisplayMode(.inline)
+    }
+
+    /// Info aggiuntive del treno, mostrate solo se disponibili (es. Trenord:
+    /// affluenza, bici, accessibilità, ritardo).
+    @ViewBuilder
+    private func trainExtras(_ train: TicketTrain) -> some View {
+        let hasAny = train.crowdingPercent != nil || train.bikeAllowed == true
+            || train.accessible == true || train.delayMinutes != nil || train.secondClassOnly == true
+        if hasAny {
+            HStack(spacing: 10) {
+                if let c = train.crowdingPercent {
+                    Label("\(c)%", systemImage: "person.3.fill")
+                        .foregroundColor(crowdColor(train.crowdingLabel))
+                }
+                if train.bikeAllowed == true { Image(systemName: "bicycle") }
+                if train.accessible == true { Image(systemName: "figure.roll") }
+                if train.secondClassOnly == true { Text("2ª cl.") }
+                if let d = train.delayMinutes {
+                    Label("+\(d)'", systemImage: "clock.badge.exclamationmark").foregroundColor(.orange)
+                }
+            }
+            .font(.caption2)
+            .foregroundColor(.secondary)
+        }
+    }
+
+    private func crowdColor(_ label: String?) -> Color {
+        switch label {
+        case "uncrowded": return .green
+        case "average": return .yellow
+        case "crowded": return .orange
+        default: return .secondary
+        }
     }
 
     private func legendRow(_ icon: String, _ text: String, _ color: Color) -> some View {

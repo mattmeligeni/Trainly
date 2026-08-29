@@ -89,7 +89,18 @@ enum BigliettiService {
         }
         do {
             let decoded = try JSONDecoder().decode(SolutionsResponse.self, from: data)
-            return (decoded.solutions ?? []).map(TicketSolution.init(raw:))
+            // Scarta le soluzioni riferite al giorno successivo (lefrecce le aggiunge
+            // quando non ci sono più treni in giornata): confrontiamo la data di
+            // partenza col giorno richiesto, in modo indipendente dalla lingua.
+            let dayFormatter = DateFormatter()
+            dayFormatter.locale = Locale(identifier: "en_US_POSIX")
+            dayFormatter.timeZone = TimeZone(identifier: "Europe/Rome")
+            dayFormatter.dateFormat = "yyyy-MM-dd"
+            let requestedDay = dayFormatter.string(from: date)
+
+            return (decoded.solutions ?? [])
+                .filter { ($0.solution?.departureTime?.prefix(10)).map(String.init) == requestedDay }
+                .map(TicketSolution.init(raw:))
         } catch {
             throw BigliettiError.decodingFailed(error)
         }

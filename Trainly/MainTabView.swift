@@ -53,6 +53,7 @@ struct MainTabView: View {
                         case .infomobilita: InfomobilitaView()
                         case .scioperi: ScioperiView()
                         case .biglietti: BigliettiView()
+                        case .bigliettiTrenord: TrenordBigliettiView()
                         }
                     }
             }

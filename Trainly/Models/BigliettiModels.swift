@@ -7,6 +7,78 @@
 
 import Foundation
 
+// MARK: - Vettore
+
+enum TicketCarrier: String, Codable {
+    case trenitalia, italo, trenord
+}
+
+// MARK: - Filtri e ordinamento (condivisi da tutte le liste soluzioni)
+
+enum ChangesFilter: String, CaseIterable, Identifiable {
+    case direct = "Diretto", max1 = "Max 1 cambio", max2 = "Max 2 cambi"
+    var id: String { rawValue }
+    var maxChanges: Int {
+        switch self {
+        case .direct: return 0
+        case .max1: return 1
+        case .max2: return 2
+        }
+    }
+}
+
+enum TicketSort: String, CaseIterable, Identifiable {
+    case priceAsc = "Prezzo crescente", priceDesc = "Prezzo decrescente", duration = "Durata"
+    var id: String { rawValue }
+}
+
+extension Array where Element == TicketSolution {
+    /// Applica filtro sui cambi e ordinamento; le soluzioni senza prezzo/durata
+    /// finiscono in fondo.
+    func filteredSorted(changes: ChangesFilter, sort: TicketSort) -> [TicketSolution] {
+        var result = filter { $0.changes <= changes.maxChanges }
+        switch sort {
+        case .priceAsc:
+            result.sort { ($0.minPrice ?? .greatestFiniteMagnitude) < ($1.minPrice ?? .greatestFiniteMagnitude) }
+        case .priceDesc:
+            result.sort { ($0.minPrice ?? -1) > ($1.minPrice ?? -1) }
+        case .duration:
+            result.sort { ($0.durationMinutes ?? .max) < ($1.durationMinutes ?? .max) }
+        }
+        return result
+    }
+}
+
+/// Parsing durata testuale (es. "8h 30min", "1h 05m", "35min") in minuti.
+enum TicketDuration {
+    static func minutes(_ text: String) -> Int? {
+        var total = 0
+        var matched = false
+        if let h = firstGroup(#"(\d+)\s*h"#, in: text) { total += h * 60; matched = true }
+        if let m = firstGroup(#"(\d+)\s*m"#, in: text) { total += m; matched = true }
+        return matched ? total : nil
+    }
+
+    private static func firstGroup(_ pattern: String, in text: String) -> Int? {
+        guard let regex = try? NSRegularExpression(pattern: pattern),
+              let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+              match.numberOfRanges > 1,
+              let range = Range(match.range(at: 1), in: text) else { return nil }
+        return Int(text[range])
+    }
+}
+
+/// Nome stazione normalizzato per il confronto tra cataloghi di vettori diversi
+/// (Trenitalia "Milano Centrale" ↔ Trenord "MILANO CENTRALE" ↔ Italo "Milano
+/// Centrale"): maiuscolo, senza accenti e con spazi/punteggiatura ridotti.
+func normalizedStationName(_ s: String) -> String {
+    let folded = s.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
+    let cleaned = folded.uppercased().unicodeScalars.map { scalar -> Character in
+        CharacterSet.alphanumerics.contains(scalar) ? Character(scalar) : " "
+    }
+    return String(cleaned).split(separator: " ").joined(separator: " ")
+}
+
 // MARK: - Stazione (locations/search)
 
 struct TrenitaliaLocation: Codable, Identifiable, Hashable {
@@ -112,9 +184,15 @@ struct TicketSolution: Identifiable {
     let minPrice: Double?
     let messages: [String]
     let co2: String?
+    var carrier: TicketCarrier = .trenitalia
+    var durationMinutes: Int? = nil
 
     var isSaleable: Bool { status == "SALEABLE" }
     var hasTrenord: Bool { trains.contains(where: \.isTrenord) }
+
+    /// Soluzione composta esclusivamente da treni Trenord: nella lista Trenitalia
+    /// (lefrecce) va nascosta perché ora Trenord ha una sezione dedicata.
+    var isPureTrenord: Bool { !trains.isEmpty && trains.allSatisfy(\.isTrenord) }
 }
 
 struct TicketTrain: Identifiable {
@@ -126,6 +204,13 @@ struct TicketTrain: Identifiable {
     let arrivalStation: String
     let isTrenord: Bool
     let logoImageName: String?   // imageset del logo (Trenord incluso)
+    // Extra opzionali (popolati dove disponibili, es. Trenord). nil = da nascondere.
+    var bikeAllowed: Bool? = nil
+    var accessible: Bool? = nil
+    var secondClassOnly: Bool? = nil
+    var crowdingPercent: Int? = nil
+    var crowdingLabel: String? = nil
+    var delayMinutes: Int? = nil
 
     /// Nome mostrato: per i suburbani Trenord (SU) la prima parola della
     /// denominazione (es. "S13"), altrimenti acronimo + numero (es. "RE 10479").
@@ -167,8 +252,9 @@ struct TicketOffer: Identifiable {
     let amount: Double?
     let seats: Int
     let status: String
-    let refundable: Bool
-    let changeable: Bool
+    let refundable: Bool?      // nil = informazione non disponibile (nessuna icona)
+    let changeable: Bool?
+    var detail: String? = nil  // testo aggiuntivo (es. penali Italo)
 }
 
 // MARK: - Adapter grezzo -> parsato
@@ -217,7 +303,7 @@ extension TicketSolution {
                     guard let amount = o.price?.amount else { return nil }
                     return TicketOffer(name: o.name ?? "", amount: amount,
                                        seats: o.availableAmount ?? 0, status: o.status ?? "",
-                                       refundable: o.canRefund ?? false, changeable: o.canChange ?? false)
+                                       refundable: o.canRefund, changeable: o.canChange)
                 }
                 guard !offers.isEmpty else { continue }
                 services.append(TicketService(group: svc.groupName ?? svc.shortName ?? svc.name ?? "", offers: offers))
@@ -246,7 +332,8 @@ extension TicketSolution {
             services: services,
             minPrice: minPrice,
             messages: messages,
-            co2: co2
+            co2: co2,
+            durationMinutes: info?.duration.flatMap(TicketDuration.minutes)
         )
     }
 

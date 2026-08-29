@@ -26,6 +26,7 @@ enum UtilityDestination: Hashable {
     case infomobilita
     case scioperi
     case biglietti
+    case bigliettiTrenord
 }
 
 struct PendingSearch: Equatable {
