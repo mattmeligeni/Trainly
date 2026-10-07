@@ -20,3 +20,6 @@ build/
 # Swift Package Manager
 .build/
 .swiftpm/
+
+# Passphrase del feed Trenord: solo locale, mai nel repository
+Trainly/Config/TrenordKey.plist

@@ -5,6 +5,8 @@
 //  Servizio Trenord (www.trenord.it/mia/bff).
 //  La risposta è cifrata AES-256-ECB: va decifrata e poi decodificata
 //  come array [TrenordSolution] (vedi TrenordModels.swift).
+//  La passphrase non è nel repository: si legge da TrenordKey.plist,
+//  escluso da git (vedi README, "Configuration").
 //
 
 import Foundation
@@ -17,12 +19,17 @@ enum TrenordError: Error {
     case decryptionFailed
     case trainNotFound
     case decodingFailed(Error)
+    /// TrenordKey.plist assente: il feed Trenord non si può decifrare.
+    case notConfigured
 }
 
 // MARK: - Servizio Trenord
 enum TrenordService {
 
-    private static let key = "CHIAVE_TRENORD_RIMOSSA"
+    /// Passphrase del feed cifrato, letta da `TrenordKey.plist` (chiave `key`) incluso nel bundle.
+    /// Il file è escluso da git: senza, i treni Trenord non sono disponibili e il resto dell'app funziona.
+    private static let key: String? = Bundle.main.url(forResource: "TrenordKey", withExtension: "plist")
+        .flatMap { NSDictionary(contentsOf: $0)?["key"] as? String }
     private static let baseURL = "https://www.trenord.it/mia/bff/"
 
     /// Percorso normalizzato pronto per la UI (TrainView).
@@ -36,6 +43,7 @@ enum TrenordService {
 
     /// Scarica, decifra e decodifica la risposta Trenord.
     static func soluzioni(trainId: String, date: String? = nil) async throws -> TrenordResponse {
+        guard key != nil else { throw TrenordError.notConfigured }
         let queryDate = date ?? Self.todayString()
         let numero = trainId.trimmingCharacters(in: .whitespacesAndNewlines)
 
@@ -72,7 +80,7 @@ enum TrenordService {
 
     // MARK: - Decrittazione AES-256-ECB (chiave = SHA256 della passphrase)
     private static func decrypt(data: Data) -> Data? {
-        guard let keyData = key.data(using: .utf8) else { return nil }
+        guard let key, let keyData = key.data(using: .utf8) else { return nil }
         var hash = [UInt8](repeating: 0, count: Int(CC_SHA256_DIGEST_LENGTH))
         keyData.withUnsafeBytes { ptr in
             _ = CC_SHA256(ptr.baseAddress, CC_LONG(keyData.count), &hash)
