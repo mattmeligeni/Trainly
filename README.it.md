@@ -1,6 +1,26 @@
 [English](README.md) | **Italiano**
 
+<p align="center"><img src="Trainly/Assets.xcassets/AppIcon.appiconset/Unknown-2.png" width="110" alt="Trainly"></p>
+
 # Trainly
+
+<p align="center">
+  <img src="https://img.shields.io/badge/iOS-17.6%2B-black?logo=apple" alt="iOS 17.6+">
+  <img src="https://img.shields.io/badge/Swift-5-F05138?logo=swift&logoColor=white" alt="Swift 5">
+  <img src="https://img.shields.io/badge/UI-SwiftUI%20%2B%20Combine-0A84FF" alt="SwiftUI">
+  <img src="https://img.shields.io/badge/dipendenze-nessuna-success" alt="No dependencies">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/licenza-PolyForm%20Strict%201.0.0-lightgrey" alt="License"></a>
+</p>
+
+<p align="center">
+  <img src="Screens/IMG_1584.jpeg" width="13.5%" alt="Schermata di Trainly">
+  <img src="Screens/IMG_1591.jpeg" width="13.5%" alt="Schermata di Trainly">
+  <img src="Screens/IMG_1594.jpeg" width="13.5%" alt="Schermata di Trainly">
+  <img src="Screens/IMG_1596.jpeg" width="13.5%" alt="Schermata di Trainly">
+  <img src="Screens/IMG_1587.jpeg" width="13.5%" alt="Schermata di Trainly">
+  <img src="Screens/IMG_1593.jpeg" width="13.5%" alt="Schermata di Trainly">
+  <img src="Screens/IMG_1595.jpeg" width="13.5%" alt="Schermata di Trainly">
+</p>
 
 Trainly è un'app iOS nativa per il tracciamento dei treni italiani e la consultazione
 di informazioni di viaggio ferroviarie. Aggrega dati in tempo reale da Trenitalia
@@ -247,8 +267,18 @@ terze parti e possono essere imprecisi o non disponibili. La funzione biglietti 
 solo di consultazione; per l'acquisto rivolgersi ai canali ufficiali o ai
 rivenditori autorizzati.
 
+## Configurazione
+
+Il feed di Trenord è cifrato. La sua passphrase non è nel repository: copia
+`Trainly/Config/TrenordKey.example.plist` in `Trainly/Config/TrenordKey.plist` (escluso da git) e imposta il
+valore `key`. Senza il file l'app funziona normalmente e i treni Trenord risultano non configurati.
+
 ## Licenza
 
-Questo repository è pubblicato a scopo di portfolio: la visualizzazione è
-consentita, ma copia, riuso, redistribuzione e usi commerciali non sono permessi.
-Vedi [LICENSE](LICENSE).
+Codice consultabile con la [PolyForm Strict License 1.0.0](LICENSE): si può leggere ed eseguire per scopi non
+commerciali; non si può modificare, ridistribuire né pubblicare senza permesso scritto. Il nome "Trainly" e la sua
+icona sono riservati. Nomi e loghi dei vettori appartengono ai rispettivi titolari.
+
+---
+
+<sub>© 2026 [Mattia Meligeni](https://mattiameligeni.com)</sub>

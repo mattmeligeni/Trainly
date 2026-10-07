@@ -1,6 +1,26 @@
 **English** | [Italiano](README.it.md)
 
+<p align="center"><img src="Trainly/Assets.xcassets/AppIcon.appiconset/Unknown-2.png" width="110" alt="Trainly"></p>
+
 # Trainly
+
+<p align="center">
+  <img src="https://img.shields.io/badge/iOS-17.6%2B-black?logo=apple" alt="iOS 17.6+">
+  <img src="https://img.shields.io/badge/Swift-5-F05138?logo=swift&logoColor=white" alt="Swift 5">
+  <img src="https://img.shields.io/badge/UI-SwiftUI%20%2B%20Combine-0A84FF" alt="SwiftUI">
+  <img src="https://img.shields.io/badge/dependencies-none-success" alt="No dependencies">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-PolyForm%20Strict%201.0.0-lightgrey" alt="License"></a>
+</p>
+
+<p align="center">
+  <img src="Screens/IMG_1584.jpeg" width="13.5%" alt="Trainly screenshot">
+  <img src="Screens/IMG_1591.jpeg" width="13.5%" alt="Trainly screenshot">
+  <img src="Screens/IMG_1594.jpeg" width="13.5%" alt="Trainly screenshot">
+  <img src="Screens/IMG_1596.jpeg" width="13.5%" alt="Trainly screenshot">
+  <img src="Screens/IMG_1587.jpeg" width="13.5%" alt="Trainly screenshot">
+  <img src="Screens/IMG_1593.jpeg" width="13.5%" alt="Trainly screenshot">
+  <img src="Screens/IMG_1595.jpeg" width="13.5%" alt="Trainly screenshot">
+</p>
 
 Trainly is a native iOS app for tracking Italian trains and looking up rail travel
 information. It aggregates real‑time data from Trenitalia (ViaggiaTreno), Italo and
@@ -233,8 +253,18 @@ Trenord, RFI or the Ministry of Transport. Data is provided as‑is from third�
 endpoints and may be inaccurate or unavailable. The ticket feature is for lookup
 only; purchase tickets through official channels or authorized resellers.
 
+## Configuration
+
+The Trenord feed is encrypted. Its passphrase is not part of this repository: copy
+`Trainly/Config/TrenordKey.example.plist` to `Trainly/Config/TrenordKey.plist` (git-ignored) and set the `key`
+value. Without the file the app works normally and Trenord trains are reported as not configured.
+
 ## License
 
-This repository is published for portfolio purposes: viewing is allowed, but
-copying, reuse, redistribution and commercial use are not permitted. See
-[LICENSE](LICENSE).
+Source-available under the [PolyForm Strict License 1.0.0](LICENSE): you may read the code and run it for
+non-commercial purposes; you may not modify, redistribute or publish it without written permission. The name
+"Trainly" and its icon are reserved. Carrier names and logos belong to their respective owners.
+
+---
+
+<sub>© 2026 [Mattia Meligeni](https://mattiameligeni.com)</sub>

@@ -1,56 +1,61 @@
-Trainly – Portfolio Source-Available License
+Required Notice: Copyright (c) 2026 Mattia Meligeni (https://mattiameligeni.com). The name "Trainly" and its icon are not licensed under these terms.
 
-Copyright (c) 2026 Mattia Meligeni. All rights reserved.
+# PolyForm Strict License 1.0.0
 
-This repository is published solely for portfolio and demonstration purposes:
-to allow viewing and evaluation of the author's work.
+<https://polyformproject.org/licenses/strict/1.0.0>
 
-1. Permitted
-   You may view, read and browse the source code and assets in this repository,
-   including cloning it locally for the sole purpose of reading and evaluating
-   the code.
+## Acceptance
 
-2. Not permitted
-   Except for the limited viewing permission above, no rights are granted.
-   In particular, without prior written permission from the author you may NOT:
-   a. copy, reproduce or redistribute this software or substantial portions of
-      it, in source or binary form;
-   b. use the code, in whole or in part, in your own projects, products or
-      services, whether commercial or non-commercial;
-   c. sell, license, sublicense, rent or otherwise commercialize the software;
-   d. modify the software and distribute derivative works based on it;
-   e. publish the app, or a derivative of it, on any app store or distribution
-      channel.
+In order to get any license under these terms, you must agree to them as both strict obligations and conditions to all your licenses.
 
-3. Third-party services
-   The software interacts with third-party data services (Trenitalia, Italo,
-   Trenord, RFI, MIT). No rights over those services, their data or their
-   trademarks are granted or implied. All referenced trademarks belong to their
-   respective owners.
+## Copyright License
 
-4. No warranty
-   The software is provided "as is", without warranty of any kind, express or
-   implied. In no event shall the author be liable for any claim, damages or
-   other liability arising from the software or its use.
+The licensor grants you a copyright license for the software to do everything you might do with the software that would otherwise infringe the licensor's copyright in it for any permitted purpose, other than distributing the software or making changes or new works based on the software.
 
-For permissions beyond the scope of this license, contact the author.
+## Patent License
 
----
+The licensor grants you a patent license for the software that covers patent claims the licensor can license, or becomes able to license, that you would infringe by using the software.
 
-Trainly – Licenza Source-Available a scopo Portfolio (traduzione di cortesia;
-in caso di conflitto prevale la versione inglese)
+## Noncommercial Purposes
 
-Copyright (c) 2026 Mattia Meligeni. Tutti i diritti riservati.
+Any noncommercial purpose is a permitted purpose.
 
-Questo repository è pubblicato esclusivamente a scopo di portfolio e
-dimostrazione: per consentire la visualizzazione e la valutazione del lavoro
-dell'autore.
+## Personal Uses
 
-È consentito visualizzare, leggere e consultare il codice sorgente, incluso il
-clone locale al solo fine di lettura e valutazione. Non è consentito, senza
-autorizzazione scritta dell'autore: copiare, riprodurre o redistribuire il
-software; utilizzarlo in propri progetti, prodotti o servizi; venderlo o
-commercializzarlo in qualsiasi forma; distribuire opere derivate; pubblicare
-l'app o suoi derivati su qualsiasi store o canale di distribuzione.
+Personal use for research, experiment, and testing for the benefit of public knowledge, personal study, private entertainment, hobby projects, amateur pursuits, or religious observance, without any anticipated commercial application, is use for a permitted purpose.
 
-Il software è fornito "così com'è", senza alcuna garanzia.
+## Noncommercial Organizations
+
+Use by any charitable organization, educational institution, public research organization, public safety or health organization, environmental protection organization, or government institution is use for a permitted purpose regardless of the source of funding or obligations resulting from the funding.
+
+## Fair Use
+
+You may have "fair use" rights for the software under the law. These terms do not limit them.
+
+## No Other Rights
+
+These terms do not allow you to sublicense or transfer any of your licenses to anyone else, or prevent the licensor from granting licenses to anyone else.  These terms do not imply any other licenses.
+
+## Patent Defense
+
+If you make any written claim that the software infringes or contributes to infringement of any patent, your patent license for the software granted under these terms ends immediately. If your company makes such a claim, your patent license ends immediately for work on behalf of your company.
+
+## Violations
+
+The first time you are notified in writing that you have violated any of these terms, or done anything with the software not covered by your licenses, your licenses can nonetheless continue if you come into full compliance with these terms, and take practical steps to correct past violations, within 32 days of receiving notice.  Otherwise, all your licenses end immediately.
+
+## No Liability
+
+***As far as the law allows, the software comes as is, without any warranty or condition, and the licensor will not be liable to you for any damages arising out of these terms or the use or nature of the software, under any kind of legal claim.***
+
+## Definitions
+
+The **licensor** is the individual or entity offering these terms, and the **software** is the software the licensor makes available under these terms.
+
+**You** refers to the individual or entity agreeing to these terms.
+
+**Your company** is any legal entity, sole proprietorship, or other kind of organization that you work for, plus all organizations that have control over, are under the control of, or are under common control with that organization.  **Control** means ownership of substantially all the assets of an entity, or the power to direct its management and policies by vote, contract, or otherwise.  Control can be direct or indirect.
+
+**Your licenses** are all the licenses granted to you for the software under these terms.
+
+**Use** means anything you do with the software requiring one of your licenses.
