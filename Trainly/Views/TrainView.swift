@@ -450,7 +450,7 @@ private struct TimeColumn: View {
 
     private var isDelayed: Bool {
         guard let s = scheduled, let l = live else { return false }
-        return l.timeIntervalSince(s) >= 60   // da 1 minuto in poi = in ritardo
+        return TrainJourney.difference(l, from: s) >= 60   // da 1 minuto in poi = in ritardo
     }
 
     var body: some View {

@@ -361,7 +361,8 @@ struct SearchView: View {
     private func search() {
         searchFocused = false // chiude la tastiera
         let numero = searchText.trimmingCharacters(in: .whitespaces)
-        guard !numero.isEmpty else { return }
+        // Un secondo invio durante la ricerca ne avviava un'altra in parallelo, con due risultati in arrivo.
+        guard !numero.isEmpty, !isLoading else { return }
         performSearch(vettore: selectedVector, numero: numero)
     }
 
@@ -428,16 +429,21 @@ struct SearchView: View {
         ExactTrenitaliaRef(codOrigine: ref.codOrigine, numero: ref.numero, timestamp: ref.timestamp)
     }
 
-    /// Prova tutti gli altri vettori e restituisce quelli che trovano il treno.
+    /// Prova tutti gli altri vettori, in parallelo, e restituisce quelli che trovano il treno (nell'ordine dei
+    /// vettori). Prima uno dopo l'altro: con un vettore lento l'attesa si sommava.
     private func findAlternatives(numero: String, excluding: vector) async -> [TrainDestination] {
-        var found: [TrainDestination] = []
-        for v in vector.allCases where v != excluding {
-            if let journey = await TrainService.reload(vector: v.rawValue, numero: numero),
-               !journey.stops.isEmpty {
-                found.append(TrainDestination(journey: journey, vector: v.rawValue))
+        let altri = vector.allCases.filter { $0 != excluding }.map(\.rawValue)
+        let trovati = await withTaskGroup(of: (String, TrainJourney?).self) { group in
+            for v in altri {
+                group.addTask { (v, await TrainService.reload(vector: v, numero: numero)) }
             }
+            var risultati: [String: TrainJourney] = [:]
+            for await (v, journey) in group {
+                if let journey, !journey.stops.isEmpty { risultati[v] = journey }
+            }
+            return risultati
         }
-        return found
+        return altri.compactMap { v in trovati[v].map { TrainDestination(journey: $0, vector: v) } }
     }
 }
 

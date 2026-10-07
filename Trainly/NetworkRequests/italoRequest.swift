@@ -31,7 +31,9 @@ enum ItaloService {
     /// Risposta grezza per il treno indicato.
     static func ricerca(numeroTreno: String) async throws -> ItaloResponse {
         let numero = numeroTreno.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let url = URL(string: "\(baseURL)?TrainNumber=\(numero)") else {
+        var components = URLComponents(string: baseURL)
+        components?.queryItems = [URLQueryItem(name: "TrainNumber", value: numero)]
+        guard let url = components?.url else {
             throw ItaloError.invalidURL
         }
 

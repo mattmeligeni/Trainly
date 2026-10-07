@@ -72,8 +72,12 @@ enum TrenordService {
         }
     }
 
+    /// Data di oggi in Italia, nel calendario gregoriano qualunque siano le impostazioni dell'iPhone.
     private static func todayString() -> String {
         let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.timeZone = TimeZone(identifier: "Europe/Rome")
         formatter.dateFormat = "yyyy-MM-dd"
         return formatter.string(from: Date())
     }

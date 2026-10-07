@@ -60,10 +60,10 @@ struct TrainStop: Identifiable, Hashable {
     /// Ritardo in minuti sulla fermata, calcolato su arrivo o partenza.
     var delayMinutes: Int? {
         if let sched = scheduledArrival, let act = actualArrival {
-            return Int(act.timeIntervalSince(sched) / 60)
+            return Int(TrainJourney.difference(act, from: sched) / 60)
         }
         if let sched = scheduledDeparture, let act = actualDeparture {
-            return Int(act.timeIntervalSince(sched) / 60)
+            return Int(TrainJourney.difference(act, from: sched) / 60)
         }
         return nil
     }
@@ -316,9 +316,9 @@ extension TrainJourney {
         for p in passes {
             let a = p.actualData
             if let real = TrainJourney.time(a?.depActualTime), let sched = TrainJourney.time(p.depTime) {
-                delaySeconds = real.timeIntervalSince(sched)
+                delaySeconds = TrainJourney.difference(real, from: sched)
             } else if let real = TrainJourney.time(a?.arrActualTime), let sched = TrainJourney.time(p.arrTime) {
-                delaySeconds = real.timeIntervalSince(sched)
+                delaySeconds = TrainJourney.difference(real, from: sched)
             }
         }
 
@@ -371,17 +371,30 @@ extension TrainJourney {
 
 extension TrainJourney {
 
+    // Formati fissi: serve la locale POSIX, altrimenti con l'orologio a 12 ore nelle impostazioni dell'iPhone il
+    // parsing di "HH:mm" può fallire.
     private static let hmFormatter: DateFormatter = {
         let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
         f.dateFormat = "HH:mm"
         return f
     }()
 
     private static let hmsFormatter: DateFormatter = {
         let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
         f.dateFormat = "HH:mm:ss"
         return f
     }()
+
+    /// `a - b` in secondi. Italo e Trenord danno solo l'ora, senza data: a cavallo della mezzanotte un treno previsto
+    /// alle 23:58 e arrivato alle 00:03 risulterebbe in anticipo di 1435 minuti. Oltre ±12 ore si gira sul giorno.
+    static func difference(_ a: Date, from b: Date) -> TimeInterval {
+        var d = a.timeIntervalSince(b)
+        let giorno: TimeInterval = 24 * 3600
+        if d > giorno / 2 { d -= giorno } else if d < -giorno / 2 { d += giorno }
+        return d
+    }
 
     /// Converte orari stringa "HH:mm" o "HH:mm:ss" in Date (odierna).
     /// Restituisce nil per stringhe vuote o nil (fermata senza quell'orario).
