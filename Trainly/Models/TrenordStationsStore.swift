@@ -24,15 +24,18 @@ enum TrenordTicketAPI {
     }
 }
 
-struct TrenordStationEntry: Codable, Hashable {
+nonisolated struct TrenordStationEntry: Codable, Hashable, Sendable {
     let name: String            // NomeGeoStazioni: esattamente il valore atteso dall'API hafas
 }
 
 /// Risposta grezza del catalogo (solo il campo che ci serve).
-private struct RawTrenordStation: Codable {
+private nonisolated struct RawTrenordStation: Codable, Sendable {
     let NomeGeoStazioni: String?
 }
 
+// Main actor esplicito: `stations` e `index` cambiano sempre insieme e solo
+// qui; le viste lo osservano con @ObservedObject.
+@MainActor
 final class TrenordStationsStore: ObservableObject {
     static let shared = TrenordStationsStore()
 
@@ -62,7 +65,7 @@ final class TrenordStationsStore: ObservableObject {
     func refresh() async {
         guard let fetched = await download() else { return }
         if fetched != stations {
-            await MainActor.run { self.stations = fetched }
+            stations = fetched
             rebuildIndex(fetched)
             if let data = try? JSONEncoder().encode(fetched) {
                 try? data.write(to: cacheURL, options: .atomic)
@@ -77,17 +80,18 @@ final class TrenordStationsStore: ObservableObject {
         index[normalizedStationName(name)]
     }
 
-    /// Suggerimenti locali istantanei per il picker Trenord (prefix match prima).
+    /// Suggerimenti locali istantanei per il picker Trenord (prefix match prima),
+    /// sui nomi normalizzati: "forli" trova "FORLI'".
     func suggest(_ query: String, limit: Int = 12) -> [String] {
-        let q = query.trimmingCharacters(in: .whitespaces).lowercased()
+        let q = normalizedStationName(query)
         guard q.count >= 2 else { return [] }
-        let matches = stations.map(\.name).filter { $0.lowercased().contains(q) }
-        return Array(matches.sorted { a, b in
-            let ap = a.lowercased().hasPrefix(q)
-            let bp = b.lowercased().hasPrefix(q)
+        let matches = index.filter { $0.key.contains(q) }
+        return matches.sorted { a, b in
+            let ap = a.key.hasPrefix(q)
+            let bp = b.key.hasPrefix(q)
             if ap != bp { return ap }
-            return a < b
-        }.prefix(limit))
+            return a.value < b.value
+        }.prefix(limit).map(\.value)
     }
 
     // MARK: - Persistenza
@@ -108,9 +112,14 @@ final class TrenordStationsStore: ObservableObject {
     private func download() async -> [TrenordStationEntry]? {
         let request = TrenordTicketAPI.request(url: remoteURL)
         guard let (data, response) = try? await URLSession.shared.data(for: request),
-              (response as? HTTPURLResponse)?.statusCode == 200,
-              let raw = try? JSONDecoder().decode([RawTrenordStation].self, from: data) else { return nil }
+              (response as? HTTPURLResponse)?.statusCode == 200 else { return nil }
+        return await Self.decode(data)
+    }
 
+    /// `@concurrent`: decodifica del catalogo fuori dal main thread.
+    @concurrent
+    private nonisolated static func decode(_ data: Data) async -> [TrenordStationEntry]? {
+        guard let raw = try? JSONDecoder().decode([RawTrenordStation].self, from: data) else { return nil }
         let entries = raw.compactMap { r -> TrenordStationEntry? in
             guard let n = r.NomeGeoStazioni, !n.isEmpty else { return nil }
             return TrenordStationEntry(name: n)

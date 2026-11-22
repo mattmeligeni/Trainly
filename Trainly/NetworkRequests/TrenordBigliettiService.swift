@@ -16,6 +16,15 @@ struct TrenordSearchResult {
     let date: Date
     let solutions: [TicketSolution]
     let lastDepTime: String?
+    var endOfDay = false
+}
+
+/// Una pagina hafas già filtrata sulla giornata richiesta.
+struct TrenordPage {
+    let solutions: [TicketSolution]
+    let lastDepTime: String?
+    /// La pagina arriva alla fine della giornata: niente "Mostra successivi".
+    let endOfDay: Bool
 }
 
 enum TrenordTicketService {
@@ -23,24 +32,32 @@ enum TrenordTicketService {
     private static let base = "https://cloud.mp.trenord.it/hafas/v2"
 
     /// Prima pagina: risolve i nomi (dal nome scelto sul catalogo Trenitalia) e
-    /// cerca a partire dall'orario indicato. `nil` se una delle due stazioni non
-    /// è servita da Trenord.
+    /// cerca a partire dall'orario indicato. Lancia `notServed` se una delle due
+    /// stazioni non è servita da Trenord, un errore di rete altrimenti.
     static func firstPage(originName: String, destName: String,
-                          date: Date, fromTime: String) async -> TrenordSearchResult? {
+                          date: Date, fromTime: String) async throws -> TrenordSearchResult {
         let store = TrenordStationsStore.shared
-        guard let origin = store.resolve(originName),
-              let destination = store.resolve(destName) else { return nil }
+        // Primo avvio: il catalogo potrebbe non essere ancora arrivato.
+        if store.stations.isEmpty { await store.refreshIfNeeded() }
+        guard !store.stations.isEmpty else { throw TicketSearchError.server }
+        guard let origin = store.resolve(originName) else {
+            throw TicketSearchError.notServed("Trenord non serve \(originName).")
+        }
+        guard let destination = store.resolve(destName) else {
+            throw TicketSearchError.notServed("Trenord non serve \(destName).")
+        }
 
-        let (solutions, last) = await page(trenordOrigin: origin, trenordDestination: destination,
-                                           date: date, fromTime: fromTime)
+        let first = try await page(trenordOrigin: origin, trenordDestination: destination,
+                                   date: date, fromTime: fromTime)
         return TrenordSearchResult(trenordOrigin: origin, trenordDestination: destination,
-                                   date: date, solutions: solutions, lastDepTime: last)
+                                   date: date, solutions: first.solutions,
+                                   lastDepTime: first.lastDepTime, endOfDay: first.endOfDay)
     }
 
     /// Una pagina di soluzioni. Ritorna le soluzioni e l'orario di partenza
     /// dell'ultima (per calcolare l'inizio della pagina successiva).
     static func page(trenordOrigin: String, trenordDestination: String,
-                     date: Date, fromTime: String) async -> (solutions: [TicketSolution], lastDepTime: String?) {
+                     date: Date, fromTime: String) async throws -> TrenordPage {
         let dateStr: String = {
             let f = DateFormatter()
             f.locale = Locale(identifier: "en_US_POSIX")
@@ -63,18 +80,29 @@ enum TrenordTicketService {
             URLQueryItem(name: "language", value: "it"),
             URLQueryItem(name: "products", value: "all")
         ]
-        guard let url = comps?.url else { return ([], nil) }
+        guard let url = comps?.url else { throw TicketSearchError.server }
 
-        let request = TrenordTicketAPI.request(url: url)
-        guard let (data, response) = try? await URLSession.shared.data(for: request),
-              (response as? HTTPURLResponse)?.statusCode == 200,
+        var request = TrenordTicketAPI.request(url: url)
+        request.timeoutInterval = 20
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard (response as? HTTPURLResponse)?.statusCode == 200,
               let decoded = try? JSONDecoder().decode(TrenordSolutionsResponse.self, from: data) else {
-            return ([], nil)
+            throw TicketSearchError.server
         }
 
         let raw = decoded.solutions ?? []
-        let solutions = raw.map { TicketSolution(trenordSolution: $0, originName: trenordOrigin, destName: trenordDestination) }
-        let lastDep = raw.compactMap { $0.dep_time }.last.map(TrenordTime.hhmm)
-        return (solutions, lastDep)
+        // Partenze ben prima dell'orario richiesto = treni del giorno dopo (hafas
+        // prosegue oltre la mezzanotte): li scartiamo e chiudiamo la giornata.
+        // Un'ora di margine per non scambiare un anticipo di hafas per un giro di giorno.
+        let fromMinutes = TrenordTime.minutes(fromTime) ?? 0
+        let sameDay = raw.filter { sol in
+            guard let dep = TrenordTime.minutes(sol.dep_time) else { return true }
+            return dep >= fromMinutes - 60
+        }
+        let solutions = sameDay.map { TicketSolution(trenordSolution: $0, originName: trenordOrigin, destName: trenordDestination) }
+        let lastDep = sameDay.compactMap { $0.dep_time }.last.map(TrenordTime.hhmm)
+        let endOfDay = raw.isEmpty || sameDay.count < raw.count
+            || lastDep.flatMap(TrenordTime.nextMinute) == nil
+        return TrenordPage(solutions: solutions, lastDepTime: lastDep, endOfDay: endOfDay)
     }
 }

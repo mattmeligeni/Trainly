@@ -82,10 +82,35 @@ struct MainTabView: View {
             }
             .tag(Tab.settings)
         }
+        // iPhone Duo: schede sul lato dove lo decide il sistema, ma barre orizzontali
+        // standard sullo schermo interno in verticale (HIG, Vertical controls).
+        .duoHorizontalBarsWhenTall()
         .environmentObject(router)
         .preferredColorScheme(colorScheme)
         // Tap globale su un punto vuoto per chiudere la tastiera ovunque.
         .background(KeyboardDismissInstaller())
+        // preferredColorScheme(nil) non sempre riporta finestra e fogli aperti
+        // all'aspetto di sistema (Scuro → Sistema): lo forziamo sulla finestra.
+        .background(AppearanceApplier(appearance: appearance))
+    }
+}
+
+/// Applica il tema scelto a tutte le finestre della scena (fogli compresi).
+private struct AppearanceApplier: UIViewRepresentable {
+    let appearance: String
+
+    func makeUIView(context: Context) -> UIView { UIView(frame: .zero) }
+
+    func updateUIView(_ uiView: UIView, context: Context) {
+        let style: UIUserInterfaceStyle
+        switch appearance {
+        case "light": style = .light
+        case "dark": style = .dark
+        default: style = .unspecified
+        }
+        DispatchQueue.main.async {
+            uiView.window?.windowScene?.windows.forEach { $0.overrideUserInterfaceStyle = style }
+        }
     }
 }
 

@@ -29,7 +29,9 @@ struct FavoritesView: View {
             }
         }
         .navigationDestination(for: FavoriteTrain.self) { favorite in
-            TrainLoaderView(request: .vectorNumber(vector: favorite.vector, number: favorite.number))
+            // Con l'origine si apre proprio quel treno, non un altro con lo stesso numero.
+            TrainLoaderView(request: .vectorNumber(vector: favorite.vector, number: favorite.number),
+                            originCode: favorite.originCode)
         }
     }
 
@@ -58,12 +60,12 @@ struct FavoritesView: View {
             Image(systemName: "magnifyingglass").foregroundColor(.secondary)
             TextField("Cerca per nome, tratta o vettore…", text: $query)
                 .autocorrectionDisabled(true)
-                .textContentType(.jobTitle)
                 .focused($searchFocused)
             if !query.isEmpty {
                 Button { query = ""; searchFocused = true } label: {
                     Image(systemName: "xmark.circle.fill").foregroundColor(.secondary)
                 }
+                .accessibilityLabel("Cancella ricerca")
             }
         }
         .padding(14)
@@ -135,6 +137,8 @@ struct FavoritesView: View {
             .frame(width: 44, height: 44)
             .background(Color.logoTile)
             .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            // Il logo ripete il titolo: VoiceOver leggerebbe il nome dell'asset.
+            .accessibilityHidden(true)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(favorite.title)

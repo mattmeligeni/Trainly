@@ -14,8 +14,13 @@ struct RecentTrain: Codable, Identifiable, Hashable {
     let shortName: String    // es. "IC 558", "ITALO Av 9876", "Trenord 3647"
     let origin: String
     let destination: String
+    /// Codice stazione di origine (solo Trenitalia): riapre proprio quel treno
+    /// e non un altro con lo stesso numero. Assente nei recenti più vecchi.
+    var originCode: String? = nil
 
-    var id: String { "\(vector)-\(number)" }
+    var id: String {
+        originCode.map { "\(vector)-\(number)-\($0)" } ?? "\(vector)-\(number)"
+    }
 
     /// Riga mostrata nella lista recenti.
     var line: String {
@@ -34,7 +39,11 @@ final class RecentTrainsStore: ObservableObject {
     init() { load() }
 
     func add(_ train: RecentTrain) {
-        recents.removeAll { $0.id == train.id }
+        // Toglie anche la voce senza origine dello stesso treno (vecchio formato).
+        recents.removeAll {
+            $0.id == train.id
+                || ($0.originCode == nil && $0.vector == train.vector && $0.number == train.number)
+        }
         recents.insert(train, at: 0)
         if recents.count > maxRecents {
             recents = Array(recents.prefix(maxRecents))

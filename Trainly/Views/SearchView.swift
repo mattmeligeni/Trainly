@@ -29,6 +29,12 @@ struct SearchView: View {
     @State private var isLoading = false
     @State private var destination: TrainDestination?
     @State private var errorMessage: String?
+    @State private var searchFailure: TrainLoadFailure?
+    /// Ultima ricerca, per il pulsante Riprova dopo un errore di rete.
+    @State private var lastSearch: (vettore: vector, numero: String, origine: String?)?
+    /// Ricerca in corso: una nuova (recenti, link da altre tab) annulla la precedente,
+    /// così un risultato vecchio non sovrascrive quello nuovo.
+    @State private var searchTask: Task<Void, Never>?
     @State private var suggestions: [TrainDestination] = []  // trovati su altri vettori
     @State private var choices: [TrainDestination] = [] // più corse con lo stesso numero
     @State private var showChoices = false
@@ -64,6 +70,7 @@ struct SearchView: View {
                                 Image(systemName: "xmark.circle.fill")
                                     .foregroundColor(.secondary)
                             }
+                            .accessibilityLabel("Cancella numero")
                         }
                     }
                     .padding(14)
@@ -89,21 +96,22 @@ struct SearchView: View {
                 }
 
                 // MARK: - Pulsante in basso
+                // Stile di sistema: colore d'accento e stato disabilitato con contrasto corretto
+                // (prima blu/grigio fissi).
                 Button(action: search) {
                     HStack(spacing: 8) {
                         if isLoading {
                             ProgressView()
-                                .tint(.white)
                         }
                         Text(isLoading ? "Ricerca..." : "Cerca")
                             .bold()
                     }
                     .frame(maxWidth: .infinity)
-                    .padding(.vertical, 16)
-                    .foregroundColor(.white)
-                    .background(canSearch ? Color.blue : Color.gray)
-                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .padding(.vertical, 6)
                 }
+                .buttonStyle(.borderedProminent)
+                .buttonBorderShape(.roundedRectangle(radius: 14))
+                .controlSize(.large)
                 .disabled(!canSearch) // Disabilitato se la barra è vuota o durante il caricamento
                 .padding(.horizontal)
                 .padding(.bottom, 8)
@@ -116,7 +124,7 @@ struct SearchView: View {
                     dateOptions: dest.dateOptions,
                     currentRef: dest.exactRef,
                     loadRef: { ref in
-                        try? await TrenitaliaService.journey(from: TrenitaliaTrainRef(
+                        try await TrenitaliaService.journey(from: TrenitaliaTrainRef(
                             numero: ref.numero, codOrigine: ref.codOrigine,
                             timestamp: ref.timestamp, descrizione: ""))
                     },
@@ -124,17 +132,25 @@ struct SearchView: View {
                     reload: {
                         // Pull-to-refresh: corsa esatta se nota, altrimenti per numero.
                         if let ref = dest.exactRef {
-                            return try? await TrenitaliaService.journey(from: TrenitaliaTrainRef(
+                            return try await TrenitaliaService.journey(from: TrenitaliaTrainRef(
                                 numero: ref.numero, codOrigine: ref.codOrigine,
                                 timestamp: ref.timestamp, descrizione: ""))
                         } else {
-                            return await TrainService.reload(vector: dest.vector,
-                                                             numero: dest.journey.trainNumber)
+                            return try await TrainService.fetch(vector: dest.vector,
+                                                                numero: dest.journey.trainNumber)
                         }
                     }
                 )
+                // Treno nuovo = vista nuova: lo stato interno (dati, data scelta) non
+                // deve restare quello del treno precedente.
+                .id(dest)
             }
-            .alert("Ricerca non riuscita", isPresented: errorBinding) {
+            .alert(searchFailure?.title ?? "Ricerca non riuscita", isPresented: errorBinding) {
+                if searchFailure?.canRetry == true, let last = lastSearch {
+                    Button("Riprova") {
+                        performSearch(vettore: last.vettore, numero: last.numero, origine: last.origine)
+                    }
+                }
                 Button("OK", role: .cancel) { }
             } message: {
                 Text(errorMessage ?? "")
@@ -142,9 +158,15 @@ struct SearchView: View {
             .alert("Treno non trovato", isPresented: suggestionBinding) {
                 ForEach(suggestions, id: \.self) { sugg in
                     Button("Cerca con \(sugg.vector)") {
-                        selectedVector = vector(rawValue: sugg.vector) ?? selectedVector
-                        destination = sugg
+                        let v = vector(rawValue: sugg.vector) ?? selectedVector
+                        selectedVector = v
                         suggestions = []
+                        if v == .trenitalia {
+                            // Ricerca completa: scelta fra origini diverse e corsa esatta per il refresh.
+                            performSearch(vettore: v, numero: sugg.journey.trainNumber)
+                        } else {
+                            destination = sugg
+                        }
                     }
                 }
                 Button("Annulla", role: .cancel) { suggestions = [] }
@@ -157,12 +179,9 @@ struct SearchView: View {
                 if tab == .search {
                     // Trigger affidabile quando si arriva al tab Cerca da un'altra tab.
                     handlePending()
-                } else if old == .search {
-                    // Uscendo dal tab Cerca azzeriamo treno e testo: così una nuova
-                    // apertura da un link non resta bloccata sul treno precedente.
-                    destination = nil
-                    searchText = ""
                 }
+                // Uscendo dal tab Cerca il treno aperto resta (es. dopo "Maggiori info sul
+                // disservizio" si torna al treno). Un link nuovo lo sostituisce in handlePending.
             }
             .onChange(of: defaultVector) { _, new in
                 // Il vettore predefinito cambia effetto subito, senza riavvio.
@@ -247,7 +266,8 @@ struct SearchView: View {
         let v = vector(rawValue: recent.vector) ?? .trenitalia
         selectedVector = v
         searchText = recent.number
-        performSearch(vettore: v, numero: recent.number)
+        // Con l'origine salvata si riapre lo stesso treno, non un omonimo.
+        performSearch(vettore: v, numero: recent.number, origine: recent.originCode)
     }
 
     /// Esegue una ricerca richiesta da un'altra tab (es. Tabellone, Infomobilità).
@@ -257,6 +277,8 @@ struct SearchView: View {
         selectedVector = v
         searchText = pending.number
         router.pendingSearch = nil
+        // Il treno aperto in precedenza lascia il posto a quello richiesto.
+        destination = nil
 
         if let exact = pending.exactRef {
             // Link infomobilità: apre esattamente quella corsa (anche di ieri),
@@ -268,8 +290,9 @@ struct SearchView: View {
     }
 
     private func openExactTrenitalia(_ ref: ExactTrenitaliaRef) {
+        searchTask?.cancel()
         isLoading = true
-        Task {
+        searchTask = Task {
             let trainRef = TrenitaliaTrainRef(numero: ref.numero,
                                               codOrigine: ref.codOrigine,
                                               timestamp: ref.timestamp,
@@ -278,25 +301,19 @@ struct SearchView: View {
                 let journey = try await TrenitaliaService.journey(from: trainRef)
                 // Anche dai link infomobilità mostriamo il picker se la stessa
                 // corsa esiste su più giorni.
-                let dates = await sameTrainDates(numero: ref.numero, origine: ref.codOrigine, including: ref)
+                let dates = await TrenitaliaService.dateOptions(numero: ref.numero,
+                                                                origine: ref.codOrigine, including: ref)
+                guard !Task.isCancelled else { return }
                 destination = TrainDestination(journey: journey, vector: "Trenitalia",
                                                exactRef: ref, dateOptions: dates)
             } catch {
-                // Fallback alla ricerca standard sul numero.
-                performSearch(vettore: .trenitalia, numero: ref.numero)
+                guard !Task.isCancelled else { return }
+                // Fallback alla ricerca standard sul numero (stessa origine).
+                performSearch(vettore: .trenitalia, numero: ref.numero, origine: ref.codOrigine)
+                return
             }
             isLoading = false
         }
-    }
-
-    /// Altre date della stessa corsa (stessa origine); vuoto se è unica.
-    private func sameTrainDates(numero: String, origine: String,
-                                including ref: ExactTrenitaliaRef) async -> [ExactTrenitaliaRef] {
-        guard let refs = try? await TrenitaliaService.cercaNumeriTreno(numero) else { return [] }
-        var same = refs.filter { $0.codOrigine == origine }.map(Self.exact)
-        if !same.contains(ref) { same.append(ref) }
-        guard same.count > 1 else { return [] }
-        return same.sorted { $0.timestamp < $1.timestamp }
     }
 
     // Scelta tra più corse con lo stesso numero (solo Trenitalia).
@@ -333,6 +350,9 @@ struct SearchView: View {
 
     private static let choiceFormatter: DateFormatter = {
         let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        // Orari italiani: fuso di Roma anche con l'iPhone impostato altrove.
+        f.timeZone = TrainJourney.rome
         f.dateFormat = "dd/MM HH:mm"
         return f
     }()
@@ -340,7 +360,7 @@ struct SearchView: View {
     private var errorBinding: Binding<Bool> {
         Binding(
             get: { errorMessage != nil },
-            set: { if !$0 { errorMessage = nil } }
+            set: { if !$0 { errorMessage = nil; searchFailure = nil } }
         )
     }
 
@@ -366,67 +386,63 @@ struct SearchView: View {
         performSearch(vettore: selectedVector, numero: numero)
     }
 
-    private func performSearch(vettore: vector, numero: String) {
+    private func performSearch(vettore: vector, numero: String, origine: String? = nil) {
+        // Una nuova ricerca sostituisce quella in corso (recenti, link, Riprova).
+        searchTask?.cancel()
         isLoading = true
-        Task {
+        lastSearch = (vettore, numero, origine)
+        searchTask = Task {
             do {
                 if vettore == .trenitalia {
-                    try await searchTrenitalia(numero: numero)
+                    try await searchTrenitalia(numero: numero, origine: origine)
                 } else {
                     let result = try await TrainService.fetch(vector: vettore.rawValue, numero: numero)
+                    guard !Task.isCancelled else { return }
                     destination = TrainDestination(journey: result, vector: vettore.rawValue)
                 }
             } catch {
-                // Controllo silenzioso su TUTTI gli altri vettori.
-                suggestions = await findAlternatives(numero: numero, excluding: vettore)
-                if suggestions.isEmpty {
-                    errorMessage = "Nessun treno trovato con il numero \(numero)."
+                // Annullata da una ricerca più recente: è lei a gestire lo stato.
+                guard !Task.isCancelled, let failure = TrainLoadFailure(error) else { return }
+                if failure == .notFound {
+                    // Controllo silenzioso su TUTTI gli altri vettori.
+                    let found = await findAlternatives(numero: numero, excluding: vettore)
+                    guard !Task.isCancelled else { return }
+                    suggestions = found
+                    if suggestions.isEmpty {
+                        showFailure(failure, numero: numero)
+                    }
+                } else {
+                    // Offline o servizio giù: non è "nessun treno trovato".
+                    showFailure(failure, numero: numero)
                 }
             }
-            isLoading = false
+            if !Task.isCancelled { isLoading = false }
         }
+    }
+
+    private func showFailure(_ failure: TrainLoadFailure, numero: String) {
+        searchFailure = failure
+        errorMessage = failure == .notFound
+            ? "Nessun treno trovato con il numero \(numero)."
+            : failure.message
     }
 
     /// Trenitalia può restituire più corse con lo stesso numero. Se cambiano
     /// solo per data (stessa origine) apriamo quella di oggi; mostriamo la
     /// scelta solo se sono treni effettivamente diversi.
-    private func searchTrenitalia(numero: String) async throws {
-        let refs = try await TrenitaliaService.cercaNumeriTreno(numero)
-        let groups = Dictionary(grouping: refs, by: { $0.codOrigine })
-
-        // Una sola origine = stesso treno. Apriamo quello di oggi; se la stessa
-        // corsa risulta su più giorni offriamo la scelta della data nel dettaglio
-        // (probabile viaggio iniziato il giorno prima e non ancora concluso).
-        if groups.count == 1 {
-            let sameTrain = groups.values.first!.sorted { $0.timestamp < $1.timestamp }
-            let today = TrenitaliaService.bestRef(sameTrain) ?? sameTrain[sameTrain.count - 1]
-            let journey = try await TrenitaliaService.journey(from: today)
-            let dates = sameTrain.count > 1 ? sameTrain.map(Self.exact) : []
-            destination = TrainDestination(journey: journey, vector: "Trenitalia",
-                                           exactRef: Self.exact(today), dateOptions: dates)
-            return
-        }
-
-        // Origini diverse = treni davvero diversi -> scelta.
-        var options: [TrainDestination] = []
-        for group in groups.values {
-            if let ref = TrenitaliaService.bestRef(group),
-               let journey = try? await TrenitaliaService.journey(from: ref) {
-                options.append(TrainDestination(journey: journey, vector: "Trenitalia"))
-            }
-        }
-
-        switch options.count {
-        case 0: throw TrenitaliaError.trainNotFound
-        case 1: destination = options[0]
-        default:
-            choices = options
+    /// La logica sta in TrenitaliaService (condivisa con Preferiti e Tabellone).
+    private func searchTrenitalia(numero: String, origine: String? = nil) async throws {
+        let result = try await TrenitaliaService.search(numero: numero, origine: origine)
+        guard !Task.isCancelled else { return }
+        switch result {
+        case .single(let detail):
+            destination = TrainDestination(detail)
+        case .choices(let details):
+            // Ogni opzione salva la propria corsa esatta: refresh, preferiti e
+            // recenti riaprono proprio quel treno.
+            choices = details.map(TrainDestination.init)
             showChoices = true
         }
-    }
-
-    private static func exact(_ ref: TrenitaliaTrainRef) -> ExactTrenitaliaRef {
-        ExactTrenitaliaRef(codOrigine: ref.codOrigine, numero: ref.numero, timestamp: ref.timestamp)
     }
 
     /// Prova tutti gli altri vettori, in parallelo, e restituisce quelli che trovano il treno (nell'ordine dei
@@ -454,13 +470,28 @@ struct TrainDestination: Hashable {
     var exactRef: ExactTrenitaliaRef? = nil   // corsa esatta (link infomobilità / oggi)
     var dateOptions: [ExactTrenitaliaRef] = [] // stesse corse su più giorni (picker)
 
+    /// Corsa Trenitalia risolta dal service (con riferimento esatto).
+    init(_ detail: TrenitaliaDetail) {
+        self.init(journey: detail.journey, vector: "Trenitalia",
+                  exactRef: detail.currentRef, dateOptions: detail.dateOptions)
+    }
+
+    init(journey: TrainJourney, vector: String,
+         exactRef: ExactTrenitaliaRef? = nil, dateOptions: [ExactTrenitaliaRef] = []) {
+        self.journey = journey
+        self.vector = vector
+        self.exactRef = exactRef
+        self.dateOptions = dateOptions
+    }
+
     var favorite: FavoriteTrain {
         FavoriteTrain(
             vector: vector,
             number: journey.trainNumber,
             title: journey.title,
             subtitle: "\(journey.origin) → \(journey.destination)",
-            category: journey.category
+            category: journey.category,
+            originCode: exactRef?.codOrigine
         )
     }
 
@@ -470,7 +501,8 @@ struct TrainDestination: Hashable {
             number: journey.trainNumber,
             shortName: shortName,
             origin: journey.origin,
-            destination: journey.destination
+            destination: journey.destination,
+            originCode: exactRef?.codOrigine
         )
     }
 
@@ -485,9 +517,10 @@ struct TrainDestination: Hashable {
         case "FRECCIABIANCA": code = "FB"
         case "INTERCITY-2": code = "IC"
         case "TRENITALIA-3": code = "REG"
-        case "TRENITALIA": code = "EC"
+        // EC ed EN condividono il logo: la sigla vera viene dal treno.
+        case "TRENITALIA": code = journey.categoryCode ?? "EC"
         case "LEONARDOEXP": code = "Leonardo Express"
-        default: code = ""
+        default: code = journey.categoryCode ?? ""
         }
         return code.isEmpty ? "Treno \(journey.trainNumber)" : "\(code) \(journey.trainNumber)"
     }

@@ -37,7 +37,7 @@ dal dispositivo.
 - iOS 17.6+ (compilata ed eseguita con l'SDK di iOS 26, ciclo di vita SwiftUI)
 - Xcode con Swift 5
 - Nessuna dipendenza di terze parti; solo framework Apple (SwiftUI, Foundation,
-  Combine, CommonCrypto)
+  Combine)
 
 App Transport Security: tutti gli endpoint sono HTTPS tranne ViaggiaTreno e il feed
 scioperi del MIT, raggiunti via HTTP e dichiarati come eccezioni ATS in
@@ -95,7 +95,7 @@ opzionale di orientamento carrozze e il flag di "fermata straordinaria".
 | --- | --- | --- |
 | Trenitalia (ViaggiaTreno) | `viaggiatreno.it/.../cercaNumeroTrenoTrenoAutocomplete`, `.../andamentoTreno` | testo + JSON |
 | Italo | `italoinviaggio.italotreno.com/api/RicercaTrenoService` | JSON |
-| Trenord | `trenord.it/mia/bff/train/{id}` | JSON cifrato AES‑256‑ECB |
+| Trenord | `cloud.mp.trenord.it/train/{numero}` (API dell'app Trenord) | JSON |
 | Tabellone RFI | `iechub.rfi.it/ArriviPartenze/ArrivalsDepartures/Monitor` | HTML |
 | Biglietti (BFF Le Frecce) | `lefrecce.it/Channels.Website.BFF.WEB/website/locations/search`, `.../ticket/solutions` | JSON |
 | Catalogo stazioni Trenitalia | `trenitalia.com/content/trenitalia/it.cruscotto-stations.json` | JSON (ISO‑8859‑1) |
@@ -104,11 +104,12 @@ opzionale di orientamento carrozze e il flag di "fermata straordinaria".
 
 Gestioni degne di nota:
 
-- Le risposte **Trenord** sono cifrate. `TrenordService` deriva una chiave AES‑256
-  come SHA‑256 di una passphrase fissa e decifra il corpo con CommonCrypto
-  (ECB, PKCS7), poi decodifica l'array `[TrenordSolution]` risultante.
-- **RFI** e l'**infomobilità Trenitalia** sono estratti dall'HTML con
-  `NSRegularExpression` (dot-matches-newlines) perché non esiste un'API JSON.
+- I dati in tempo reale **Trenord** arrivano dall'API dell'app Trenord, JSON in chiaro con lo
+  stesso header `secret` della ricerca biglietti. L'endpoint del sito (`trenord.it/mia/bff`)
+  restituisce gli stessi dati cifrati AES, quindi non si usa più.
+- **RFI** e l'**infomobilità Trenitalia** sono estratti dall'HTML perché non esiste
+  un'API JSON: RFI con Swift `Regex` (`dotMatchesNewlines()`), l'infomobilità con
+  `NSRegularExpression` (dot-matches-newlines).
 - Il **feed scioperi** è scaricato via HTTPS con `Accept-Encoding: identity` per
   evitare un corpo gzip che URLSession non decodificherebbe in modo trasparente dopo
   il redirect HTTP→HTTPS.
@@ -266,12 +267,6 @@ RFI o al Ministero dei Trasporti. I dati provengono così come sono da endpoint 
 terze parti e possono essere imprecisi o non disponibili. La funzione biglietti è
 solo di consultazione; per l'acquisto rivolgersi ai canali ufficiali o ai
 rivenditori autorizzati.
-
-## Configurazione
-
-Il feed di Trenord è cifrato. La sua passphrase non è nel repository: copia
-`Trainly/Config/TrenordKey.example.plist` in `Trainly/Config/TrenordKey.plist` (escluso da git) e imposta il
-valore `key`. Senza il file l'app funziona normalmente e i treni Trenord risultano non configurati.
 
 ## Licenza
 

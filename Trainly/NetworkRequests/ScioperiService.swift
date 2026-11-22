@@ -37,7 +37,10 @@ struct StrikeInfo: Codable, Identifiable {
         let t = pairs(rawTitle.components(separatedBy: " - "))
         let d = pairs(rawDesc.components(separatedBy: "<br/>"))
 
-        id = guid
+        // guid mancante: id stabile da titolo e descrizione (non `hashValue`,
+        // che cambia a ogni avvio e romperebbe la cache).
+        let trimmedGuid = guid.trimmingCharacters(in: .whitespacesAndNewlines)
+        id = trimmedGuid.isEmpty ? "strike-" + Self.stableHash(rawTitle + "|" + rawDesc) : trimmedGuid
         dataInizio = t["data inizio"] ?? d["data inizio"]
         dataFine = d["data fine"]
         settore = t["settore"] ?? d["settore"]
@@ -56,6 +59,102 @@ struct StrikeInfo: Codable, Identifiable {
             .joined(separator: " ")
             .lowercased()
         return blob.contains("ferroviar") || blob.contains("rotaia")
+    }
+
+    private static func stableHash(_ s: String) -> String {
+        var h: UInt64 = 0xcbf29ce484222325
+        for b in s.utf8 { h = (h ^ UInt64(b)) &* 0x100000001b3 }
+        return String(h, radix: 16)
+    }
+}
+
+// MARK: - Date, modalità e sindacati
+
+extension StrikeInfo {
+    /// Calendario italiano: le date del feed sono giorni a Roma, non nel fuso del telefono.
+    static let romeCalendar: Calendar = {
+        var cal = Calendar(identifier: .gregorian)
+        cal.locale = Locale(identifier: "it_IT")
+        cal.timeZone = TimeZone(identifier: "Europe/Rome") ?? .current
+        return cal
+    }()
+
+    /// Inizio del giorno (Roma) da "dd/MM/yyyy", anche se seguito da un orario.
+    static func parseDay(_ raw: String?) -> Date? {
+        guard let raw,
+              let regex = try? NSRegularExpression(pattern: "(\\d{1,2})/(\\d{1,2})/(\\d{4})"),
+              let m = regex.firstMatch(in: raw, range: NSRange(raw.startIndex..., in: raw)),
+              let dr = Range(m.range(at: 1), in: raw), let mr = Range(m.range(at: 2), in: raw),
+              let yr = Range(m.range(at: 3), in: raw),
+              let d = Int(raw[dr]), let mo = Int(raw[mr]), let y = Int(raw[yr]) else { return nil }
+        return romeCalendar.date(from: DateComponents(year: y, month: mo, day: d))
+    }
+
+    var startDay: Date? { Self.parseDay(dataInizio) ?? Self.parseDay(dataFine) }
+    var endDay: Date? { Self.parseDay(dataFine) ?? Self.parseDay(dataInizio) }
+
+    /// I due campi a volte sono invertiti nel feed: la modalità descrive orari
+    /// e durata, i sindacati sono sigle. Di norma la chiave "modalità" contiene
+    /// i sindacati (vedi `fieldA`).
+    private static func looksLikeModality(_ s: String) -> Bool {
+        let l = s.lowercased()
+        let hints = ["dalle", "giornata", "turno", "minuti", "sciopero"]
+        return l.rangeOfCharacter(from: .decimalDigits) != nil || hints.contains { l.contains($0) }
+    }
+
+    private var orderedFields: (modality: String?, unions: String?) {
+        let a = fieldA.flatMap { $0.isEmpty ? nil : $0 }
+        let b = fieldB.flatMap { $0.isEmpty ? nil : $0 }
+        if let a, Self.looksLikeModality(a), !(b.map { Self.looksLikeModality($0) } ?? false) {
+            return (a, b)
+        }
+        return (b, a)
+    }
+
+    var modality: String? { orderedFields.modality }
+    var unions: String? { orderedFields.unions }
+}
+
+/// Raggruppamento per l'elenco: in corso/oggi, prossimi 7 giorni, più avanti.
+enum StrikeSection: CaseIterable {
+    case today, nextWeek, later, undated
+
+    var title: String {
+        switch self {
+        case .today: return "In corso / oggi"
+        case .nextWeek: return "Prossimi 7 giorni"
+        case .later: return "Più avanti"
+        case .undated: return "Data non indicata"
+        }
+    }
+}
+
+extension ScioperiFeed {
+    /// Scioperi non ancora finiti, ordinati per inizio e divisi in sezioni.
+    /// Calcolato all'apertura: la cache resta valida anche il giorno dopo.
+    func sections(now: Date = Date()) -> [(section: StrikeSection, strikes: [StrikeInfo])] {
+        let cal = StrikeInfo.romeCalendar
+        let today = cal.startOfDay(for: now)
+        guard let weekEnd = cal.date(byAdding: .day, value: 7, to: today) else { return [] }
+
+        var groups: [StrikeSection: [StrikeInfo]] = [:]
+        for s in strikes {
+            guard let start = s.startDay, let end = s.endDay else {
+                groups[.undated, default: []].append(s)
+                continue
+            }
+            if end < today { continue }   // già finito
+            let section: StrikeSection = start <= today ? .today : (start <= weekEnd ? .nextWeek : .later)
+            groups[section, default: []].append(s)
+        }
+        return StrikeSection.allCases.compactMap { section in
+            guard let list = groups[section], !list.isEmpty else { return nil }
+            let sorted = list.sorted {
+                ($0.startDay ?? .distantFuture, $0.endDay ?? .distantFuture)
+                    < ($1.startDay ?? .distantFuture, $1.endDay ?? .distantFuture)
+            }
+            return (section, sorted)
+        }
     }
 }
 
@@ -88,8 +187,10 @@ enum ScioperiService {
 
         let parser = RSSParser()
         let parsed = try parser.parse(data)
+        var seen: Set<String> = []
         let strikes = parsed.items
             .map { StrikeInfo(rawTitle: $0.title, rawDesc: $0.desc, guid: $0.guid) }
+            .filter { seen.insert($0.id).inserted }   // id duplicati romperebbero il ForEach
             .filter { s in
                 let settore = (s.settore ?? "").lowercased()
                 // Ferroviario esatto (non "Appalti ferroviari") e Generale: sempre.
@@ -155,16 +256,19 @@ private final class RSSParser: NSObject, XMLParserDelegate {
     }
 }
 
-// MARK: - Store (cache in UserDefaults, refresh se più vecchio di 1 giorno)
+// MARK: - Store (cache in UserDefaults, refresh se più vecchio di 2 ore)
 
 @MainActor
 final class ScioperiStore: ObservableObject {
     @Published private(set) var feed: ScioperiFeed?
     @Published private(set) var isLoading = false
+    /// Errore dell'ultimo refresh, anche se ci sono dati in cache da mostrare.
     @Published private(set) var errorMessage: String?
 
     private let cacheKey = "scioperiFeedCache"
-    private let maxAge: TimeInterval = 86_400   // 1 giorno
+    // 2 ore: gli scioperi vengono aggiunti o revocati anche a ridosso della data.
+    private let maxAge: TimeInterval = 2 * 3600
+    private var refreshTask: Task<Void, Never>?
 
     init() { loadCache() }
 
@@ -174,14 +278,30 @@ final class ScioperiStore: ObservableObject {
     }
 
     func refresh() async {
+        // .task, pull-to-refresh e Riprova condividono lo stesso download:
+        // niente richieste parallele che si sovrascrivono.
+        if let refreshTask { await refreshTask.value; return }
+        let task = Task { await performRefresh() }
+        refreshTask = task
+        await task.value
+        refreshTask = nil
+    }
+
+    private func performRefresh() async {
         isLoading = true
-        errorMessage = nil
         do {
             let fetched = try await ScioperiService.fetch()
             feed = fetched
+            errorMessage = nil
             saveCache(fetched)
         } catch {
-            if feed == nil { errorMessage = "Impossibile caricare gli scioperi." }
+            // I dati in cache restano; l'errore viene comunque segnalato.
+            if let urlError = error as? URLError,
+               [.notConnectedToInternet, .networkConnectionLost, .dataNotAllowed].contains(urlError.code) {
+                errorMessage = "Nessuna connessione a Internet."
+            } else {
+                errorMessage = "Impossibile caricare gli scioperi."
+            }
         }
         isLoading = false
     }

@@ -17,9 +17,20 @@ struct FavoriteTrain: Codable, Identifiable, Hashable {
     let title: String      // es. "Trenitalia Frecciarossa 8509"
     let subtitle: String   // es. "Sibari → Bolzano"
     let category: String?  // nome imageset (es. "FRECCIAROSSA") per l'icona
+    /// Codice stazione di origine (solo Trenitalia): lo stesso numero può indicare
+    /// treni diversi. Assente nei preferiti salvati prima di questo campo.
+    var originCode: String? = nil
 
-    /// Identità stabile: uno stesso treno per lo stesso vettore.
-    var id: String { "\(vector)-\(number)" }
+    /// Identità stabile: uno stesso treno per lo stesso vettore (e origine, se nota).
+    var id: String {
+        originCode.map { "\(vector)-\(number)-\($0)" } ?? "\(vector)-\(number)"
+    }
+
+    /// Stesso treno: un preferito senza origine (vecchio formato) vale per ogni origine.
+    func matches(_ other: FavoriteTrain) -> Bool {
+        vector == other.vector && number == other.number
+            && (originCode == nil || other.originCode == nil || originCode == other.originCode)
+    }
 }
 
 // MARK: - Store
@@ -40,16 +51,22 @@ final class FavoritesStore: ObservableObject {
         favorites.contains { $0.id == id }
     }
 
+    /// Come `contains(_:)`, ma riconosce anche i preferiti salvati senza origine.
+    func contains(_ favorite: FavoriteTrain) -> Bool {
+        favorites.contains { $0.matches(favorite) }
+    }
+
     func toggle(_ favorite: FavoriteTrain) {
-        if contains(favorite.id) {
-            remove(favorite.id)
+        if contains(favorite) {
+            favorites.removeAll { $0.matches(favorite) }
+            save()
         } else {
             add(favorite)
         }
     }
 
     func add(_ favorite: FavoriteTrain) {
-        guard !contains(favorite.id) else { return }
+        guard !contains(favorite) else { return }
         favorites.append(favorite)
         save()
     }

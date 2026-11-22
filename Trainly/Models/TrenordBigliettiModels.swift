@@ -93,13 +93,15 @@ enum TrenordTime {
     }
 
     /// "08:47" -> "08:48" (orario di partenza della pagina successiva).
-    static func nextMinute(_ hhmm: String) -> String {
+    /// nil dopo le 23:59: la giornata è finita (prima ripartiva da 23:59 e
+    /// hafas restituiva i treni del mattino dopo come se fossero di oggi).
+    static func nextMinute(_ hhmm: String) -> String? {
         let parts = hhmm.split(separator: ":").compactMap { Int($0) }
-        guard parts.count >= 2 else { return hhmm }
+        guard parts.count >= 2 else { return nil }
         var (h, m) = (parts[0], parts[1])
         m += 1
         if m >= 60 { m = 0; h += 1 }
-        if h >= 24 { h = 23; m = 59 }
+        if h >= 24 { return nil }
         return String(format: "%02d:%02d", h, m)
     }
 }
@@ -156,8 +158,7 @@ extension TicketSolution {
             return TicketService(group: key, offers: offers)
         }
 
-        let amounts = (sol.products ?? []).compactMap { $0.price }
-        let minPrice = amounts.min()
+        let minPrice = Self.trenordAdultMinPrice(services)
         let status = (sol.saleability?.status == true) ? "SALEABLE" : "UNAVAILABLE"
 
         self.init(
@@ -176,6 +177,22 @@ extension TicketSolution {
             messages: [],
             co2: nil,
             carrier: .trenord,
-            durationMinutes: TrenordTime.minutes(sol.duration))
+            durationMinutes: TrenordTime.minutes(sol.duration),
+            pricePerPerson: true)
+    }
+
+    /// "da" Trenord sulla tariffa adulto: per ogni prodotto la variante adulto
+    /// (se riconoscibile dal nome) o la più cara, visto che ragazzi e anziani
+    /// hanno solo riduzioni; poi il minimo fra i prodotti.
+    private static func trenordAdultMinPrice(_ services: [TicketService]) -> Double? {
+        let adultHints = ["ADULT", "ORDINAR", "INTER", "STANDARD"]
+        let perProduct = services.compactMap { service -> Double? in
+            let adult = service.offers.first { offer in
+                let name = normalizedStationName(offer.name)
+                return adultHints.contains { name.contains($0) }
+            }
+            return adult?.amount ?? service.offers.compactMap(\.amount).max()
+        }
+        return perProduct.min()
     }
 }

@@ -14,6 +14,12 @@ struct ItaloLoginResponse: Codable {
     let Signature: String?
 }
 
+/// Errore BIG, es. {"Code":1130,"Message":"Error : your app is obsolete…"}.
+struct ItaloErrorResponse: Codable {
+    let Code: Int?
+    let Message: String?
+}
+
 // MARK: - Stazioni (api-biglietti.italotreno.com)
 
 struct ItaloStationsResponse: Codable {
@@ -24,6 +30,8 @@ struct ItaloStation: Codable {
     let stationCode: String?
     let name: String?
     let isItaloStation: Bool?
+    var isMAC: Bool? = nil          // stazione cumulativa, es. "Milano (Tutte)"
+    var stationClass: String? = nil // "T" treno, "B" bus
 }
 
 // MARK: - GetAvailableTrains (solo i campi usati)
@@ -45,6 +53,8 @@ struct ItaloJourney: Codable {
 
 struct ItaloSegment: Codable {
     let TrainNumber: String?
+    var DepartureStation: String? = nil
+    var ArrivalStation: String? = nil
     let STD: String?
     let STA: String?
     let NoStopTrain: Bool?
@@ -75,6 +85,7 @@ struct ItaloFarePolicy: Codable {
 }
 
 struct ItaloPaxFare: Codable {
+    var PaxType: String? = nil      // "ADT" adulto, "CHD" ragazzo
     let FullPaxFarePrice: Double?
     let DiscountedPaxFarePrice: Double?
 }
@@ -106,11 +117,14 @@ enum ItaloDate {
 // MARK: - Adapter Italo -> TicketSolution
 
 extension TicketSolution {
-    /// Costruisce una soluzione a partire da un segmento Italo vendibile (con Fares).
-    /// Ogni segmento è un singolo treno Italo (nessun cambio), quindi `direct`.
-    init(italoSegment seg: ItaloSegment, originName: String, destName: String) {
-        let std = ItaloDate.parse(seg.STD)
-        let sta = ItaloDate.parse(seg.STA)
+    /// Costruisce una soluzione da una journey Italo vendibile (ogni segmento con
+    /// Fares). Un segmento = treno diretto; più segmenti = cambi.
+    init(italoJourney segments: [ItaloSegment], originName: String, destName: String,
+         stationNames: [String: String], adults: Int, children: Int) {
+        let first = segments.first
+        let last = segments.last
+        let std = ItaloDate.parse(first?.STD)
+        let sta = ItaloDate.parse(last?.STA)
         let dep = ItaloDate.hhmmString(std)
         let arr = ItaloDate.hhmmString(sta)
 
@@ -124,19 +138,65 @@ extension TicketSolution {
             durationText = ""
         }
 
-        let number = seg.TrainNumber ?? ""
-        let train = TicketTrain(
-            label: number.isEmpty ? "Italo" : "Italo \(number)",
+        // Nome della stazione di un segmento: estremi della ricerca, altrimenti
+        // dal catalogo Italo (stazioni di cambio).
+        func stationName(_ code: String?) -> String {
+            code.flatMap { stationNames[$0] } ?? code ?? ""
+        }
+        let trains: [TicketTrain] = segments.enumerated().map { index, seg in
+            let number = seg.TrainNumber ?? ""
+            return TicketTrain(
+                label: number.isEmpty ? "Italo" : "Italo \(number)",
+                departure: ItaloDate.hhmmString(ItaloDate.parse(seg.STD)),
+                arrival: ItaloDate.hhmmString(ItaloDate.parse(seg.STA)),
+                departureStation: index == 0 ? originName : stationName(seg.DepartureStation),
+                arrivalStation: index == segments.count - 1 ? destName : stationName(seg.ArrivalStation),
+                isTrenord: false,
+                logoImageName: "ITALO")
+        }
+
+        let services = segments.count == 1
+            ? Self.italoServices(segments[0].Fares ?? [], adults: adults, children: children)
+            : Self.italoConnectionServices(segments, trains: trains, adults: adults, children: children)
+
+        let minPrice: Double?
+        if segments.count > 1 {
+            // Prezzi per tratta: il minimo è la somma dei minimi di ogni treno.
+            let perTrain = segments.map { seg in
+                Self.italoServices(seg.Fares ?? [], adults: adults, children: children)
+                    .flatMap { $0.offers.compactMap(\.amount) }.min()
+            }
+            minPrice = perTrain.contains(where: { $0 == nil }) ? nil : perTrain.compactMap { $0 }.reduce(0, +)
+        } else {
+            minPrice = services.flatMap { $0.offers.compactMap(\.amount) }.min()
+        }
+        // Le journey che arrivano qui hanno tariffe con prezzo: sono vendibili.
+        let status = minPrice != nil ? "SALEABLE" : "UNAVAILABLE"
+        let numbers = segments.map { $0.TrainNumber ?? "" }.joined(separator: "+")
+
+        self.init(
+            id: first?.STD.map { "\(numbers)-\($0)" } ?? UUID().uuidString,
+            origin: originName,
+            destination: destName,
             departure: dep,
             arrival: arr,
-            departureStation: originName,
-            arrivalStation: destName,
-            isTrenord: false,
-            logoImageName: "ITALO")
+            duration: durationText,
+            status: status,
+            direct: segments.count == 1,
+            changes: segments.count - 1,
+            trains: trains,
+            services: services,
+            minPrice: minPrice,
+            messages: [],
+            co2: nil,
+            carrier: .italo,
+            durationMinutes: minutes,
+            passengers: max(1, adults) + max(0, children))
+    }
 
-        // Servizi = classi di prodotto (Smart / Prima / Club), ognuna con le sue
-        // tariffe (offer type: Low Cost, Economy, Flex, …).
-        let fares = seg.Fares ?? []
+    /// Servizi = classi di prodotto (Smart / Prima / Club), ognuna con le sue
+    /// tariffe (offer type: Low Cost, Economy, Flex, …).
+    private static func italoServices(_ fares: [ItaloFare], adults: Int, children: Int) -> [TicketService] {
         var grouped: [String: [ItaloFare]] = [:]
         var order: [String] = []
         for f in fares {
@@ -144,14 +204,12 @@ extension TicketSolution {
             if grouped[key] == nil { order.append(key) }
             grouped[key, default: []].append(f)
         }
-        let services: [TicketService] = order.map { key in
+        return order.map { key in
             let offers = (grouped[key] ?? []).map { f -> TicketOffer in
-                let pax = f.PaxFares?.first
-                let amount = pax?.DiscountedPaxFarePrice ?? pax?.FullPaxFarePrice
                 let (changeable, refundable, detail) = Self.italoPolicy(f.FarePolicy)
                 return TicketOffer(
                     name: f.ClassOfServiceName ?? "",
-                    amount: amount,
+                    amount: italoTotal(f.PaxFares, adults: adults, children: children),
                     seats: 0,                     // AvailableCount non è affidabile per gli ospiti
                     status: "",
                     refundable: refundable,
@@ -160,29 +218,28 @@ extension TicketSolution {
             }
             return TicketService(group: key, offers: offers)
         }
+    }
 
-        let amounts = services.flatMap { $0.offers.compactMap(\.amount) }
-        let minPrice = amounts.min()
-        // I segmenti che arrivano qui hanno tariffe con prezzo: sono vendibili.
-        let status = minPrice != nil ? "SALEABLE" : "UNAVAILABLE"
+    /// Con un cambio le tariffe sono per singolo treno: le mostriamo per tratta
+    /// ("Italo 9915 · Smart"), senza inventare combinazioni.
+    private static func italoConnectionServices(_ segments: [ItaloSegment], trains: [TicketTrain],
+                                                adults: Int, children: Int) -> [TicketService] {
+        zip(segments, trains).flatMap { seg, train in
+            italoServices(seg.Fares ?? [], adults: adults, children: children).map {
+                TicketService(group: "\(train.label) · \($0.group)", offers: $0.offers)
+            }
+        }
+    }
 
-        self.init(
-            id: seg.STD.map { "\(number)-\($0)" } ?? UUID().uuidString,
-            origin: originName,
-            destination: destName,
-            departure: dep,
-            arrival: arr,
-            duration: durationText,
-            status: status,
-            direct: true,
-            changes: 0,
-            trains: [train],
-            services: services,
-            minPrice: minPrice,
-            messages: [],
-            co2: nil,
-            carrier: .italo,
-            durationMinutes: minutes)
+    /// Prezzo totale della tariffa per tutti i passeggeri: PaxFares riporta il
+    /// prezzo unitario per tipo di passeggero (ADT adulto, CHD ragazzo).
+    private static func italoTotal(_ paxFares: [ItaloPaxFare]?, adults: Int, children: Int) -> Double? {
+        guard let fares = paxFares, !fares.isEmpty else { return nil }
+        func unit(_ f: ItaloPaxFare?) -> Double? { f?.DiscountedPaxFarePrice ?? f?.FullPaxFarePrice }
+        let adultFare = fares.first { $0.PaxType == "ADT" } ?? fares.first
+        guard let adult = unit(adultFare) else { return nil }
+        let child = unit(fares.first { $0.PaxType == "CHD" }) ?? adult
+        return adult * Double(max(1, adults)) + child * Double(max(0, children))
     }
 
     /// Interpreta la FarePolicy Italo -> (modificabile?, rimborsabile?, testo).

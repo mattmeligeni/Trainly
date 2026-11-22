@@ -22,10 +22,15 @@ struct TrainJourney: Hashable {
     let lastDetectionTime: Date?
     var notice: String? = nil           // avviso cancellazione/modifica (rosso)
     let stops: [TrainStop]
+    var isCancelled = false             // treno soppresso per intero
+    var isPartiallyCancelled = false    // alcune fermate non vengono effettuate
+    var categoryCode: String? = nil     // sigla del tipo treno (es. "FR", "EC"), solo Trenitalia
+    var dataUpdatedAt: Date? = nil      // ora dei dati dichiarata dal vettore (Italo LastUpdate)
 
     /// Prossima fermata da effettuare (la prima non ancora passata).
+    /// Le fermate soppresse non si effettuano: non possono essere la prossima.
     var nextStop: TrainStop? {
-        stops.first { !$0.isPassed }
+        stops.first { !$0.isPassed && !$0.isCancelled }
     }
 
     /// Orario di partenza dall'origine (per distinguere corse con lo stesso numero).
@@ -56,6 +61,8 @@ struct TrainStop: Identifiable, Hashable {
 
     var isFirst = false
     var isLast = false
+    var stationCode: String? = nil // codice ViaggiaTreno (solo Trenitalia), es. "S01700"
+    var isCancelled = false        // fermata soppressa: il treno non ci passa
 
     /// Ritardo in minuti sulla fermata, calcolato su arrivo o partenza.
     var delayMinutes: Int? {
@@ -76,6 +83,21 @@ extension TrainJourney {
     /// Costruisce un percorso normalizzato dalla risposta Trenitalia.
     init(trenitalia r: TrenitaliaResponse, now: Date = Date()) {
         let raw = r.fermate ?? []
+
+        // Soppressione dell'intero treno o di parte del percorso.
+        let tipo = r.tipoTreno?.uppercased() ?? ""
+        let cancelled = tipo == "ST" || r.provvedimento == 1
+
+        // Fermata effettuata se ha già una partenza/arrivo reale nel passato.
+        // Poi conta l'ultima effettuata: una fermata intermedia senza rilevamento
+        // non deve restare "da fare".
+        let reached: [Bool] = raw.map { f in
+            let lastActual = TrainJourney.date(fromMillis: f.partenzaReale)
+                ?? TrainJourney.date(fromMillis: f.arrivoReale)
+            return (lastActual.map { $0 <= now }) ?? false
+        }
+        let passedFlags = TrainJourney.passedUpTo(reached)
+
         let stops: [TrainStop] = raw.enumerated().map { index, f in
             let isFirst = index == 0
             let isLast = index == raw.count - 1
@@ -98,10 +120,6 @@ extension TrainJourney {
             let confirmed = effPlatform != nil
             let platform = effPlatform ?? progPlatform
 
-            // Fermata effettuata se ha già una partenza/arrivo reale nel passato.
-            let lastActual = actualDeparture ?? actualArrival
-            let passed = (lastActual.map { $0 <= now }) ?? false
-
             return TrainStop(
                 stationName: (f.stazione ?? "").capitalized,
                 scheduledArrival: scheduledArrival,
@@ -112,15 +130,19 @@ extension TrainJourney {
                 estimatedDeparture: estimatedDeparture,
                 platform: platform,
                 platformConfirmed: confirmed,
-                isPassed: passed,
+                isPassed: passedFlags[index],
                 orientation: TrainJourney.orientationLabel(
                     desc: r.compOrientamento ?? r.descOrientamento ?? [],
                     orientamento: f.orientamento),
                 isExtraordinary: f.actualFermataType == 2,
                 isFirst: isFirst,
-                isLast: isLast
+                isLast: isLast,
+                stationCode: f.id,
+                isCancelled: cancelled || f.actualFermataType == 3
             )
         }
+        let partial = !cancelled
+            && (["PP", "SI", "SF"].contains(tipo) || r.provvedimento == 2 || stops.contains(where: \.isCancelled))
 
         let numero = r.numeroTreno.map(String.init) ?? ""
         let origin = (r.origine ?? "").capitalized
@@ -141,6 +163,11 @@ extension TrainJourney {
             type = TrainJourney.trenitaliaType(fromCompNumero: r.compNumeroTreno)
         }
 
+        // Senza subTitle la soppressione non era segnalata e il treno risultava "In orario".
+        let fallbackNotice: String? = cancelled
+            ? "Treno soppresso."
+            : (partial ? "Treno parzialmente soppresso: alcune fermate non vengono effettuate." : nil)
+
         let title = ["Trenitalia", type, numero.isEmpty ? nil : numero]
             .compactMap { $0 }
             .joined(separator: " ")
@@ -154,8 +181,11 @@ extension TrainJourney {
             delayMinutes: r.ritardo ?? 0,
             lastDetectionStation: r.stazioneUltimoRilevamento?.capitalized,
             lastDetectionTime: TrainJourney.date(fromMillis: r.oraUltimoRilevamento),
-            notice: TrainJourney.disruptionNotice(r.subTitle),
-            stops: stops
+            notice: TrainJourney.disruptionNotice(r.subTitle) ?? fallbackNotice,
+            stops: stops,
+            isCancelled: cancelled,
+            isPartiallyCancelled: partial,
+            categoryCode: TrainJourney.prefix(fromCompNumero: r.compNumeroTreno)
         )
     }
 
@@ -166,30 +196,37 @@ extension TrainJourney {
         return (s?.isEmpty == false) ? s : nil
     }
 
-    /// Ricava il nome dell'imageset dal prefisso di `compNumeroTreno` (es. " FR 8509").
-    private static func category(fromCompNumero comp: String?) -> String? {
+    /// Sigla del tipo treno da `compNumeroTreno` (es. " FR 8509" -> "FR").
+    private static func prefix(fromCompNumero comp: String?) -> String? {
         guard let comp = comp?.trimmingCharacters(in: .whitespaces), !comp.isEmpty else { return nil }
-        let prefix = (comp.split(separator: " ").first.map(String.init) ?? comp).uppercased()
-        switch prefix {
+        return (comp.split(separator: " ").first.map(String.init) ?? comp).uppercased()
+    }
+
+    /// Ricava il nome dell'imageset dal prefisso di `compNumeroTreno` (es. " FR 8509").
+    /// Prefissi sconosciuti (bus, ecc.) restano senza categoria: prima diventavano
+    /// tutti "TRENITALIA" e mostravano anche la mappa posti.
+    private static func category(fromCompNumero comp: String?) -> String? {
+        switch prefix(fromCompNumero: comp) {
         case "FR": return "FRECCIAROSSA"
         case "FA": return "FRECCIARGENTO"
         case "FB": return "FRECCIABIANCA"
         case "IC", "ICN": return "INTERCITY-2"
         case "REG", "RV", "R": return "TRENITALIA-3"
-        default: return "TRENITALIA"
+        case "EC", "EN": return "TRENITALIA"
+        default: return nil
         }
     }
 
     /// Nome leggibile del tipo treno per il titolo, dal prefisso di `compNumeroTreno`.
     private static func trenitaliaType(fromCompNumero comp: String?) -> String? {
-        guard let comp = comp?.trimmingCharacters(in: .whitespaces), !comp.isEmpty else { return nil }
-        let prefix = (comp.split(separator: " ").first.map(String.init) ?? comp).uppercased()
-        switch prefix {
+        switch prefix(fromCompNumero: comp) {
         case "FR": return "Frecciarossa"
         case "FA": return "Frecciargento"
         case "FB": return "Frecciabianca"
         case "IC", "ICN": return "Intercity"
         case "REG", "RV", "R": return "Regionale"
+        case "EC": return "EuroCity"
+        case "EN": return "EuroNight"
         default: return nil
         }
     }
@@ -242,6 +279,8 @@ extension TrainJourney {
 
         // La stazione di origine non è nelle liste: la ricostruiamo a parte.
         let originPassed = !(s.stazioniFerme ?? []).isEmpty
+        // Effettuate fino all'ultima in StazioniFerme (origine compresa).
+        let passedFlags = TrainJourney.passedUpTo([originPassed] + intermediate.map { $0.1 })
         let originSched = TrainJourney.time(s.departureDate)
         let origin = TrainStop(
             stationName: s.departureStationDescription ?? "",
@@ -252,7 +291,7 @@ extension TrainJourney {
             estimatedDeparture: originSched?.addingTimeInterval(delaySeconds),
             platform: nil,
             platformConfirmed: false,
-            isPassed: originPassed,
+            isPassed: passedFlags[0],
             isFirst: true,
             isLast: false
         )
@@ -279,7 +318,7 @@ extension TrainJourney {
                 estimatedDeparture: schedDep?.addingTimeInterval(delaySeconds),
                 platform: platform,
                 platformConfirmed: platform != nil,
-                isPassed: passed,
+                isPassed: passedFlags[offset + 1],
                 isFirst: false,
                 isLast: isLast
             ))
@@ -295,8 +334,26 @@ extension TrainJourney {
             delayMinutes: s.distruption?.delayAmount ?? 0,
             lastDetectionStation: nil,
             lastDetectionTime: nil,
-            stops: stops
+            // Italo segnala le anomalie solo con un flag, senza testo.
+            notice: s.distruption?.warning == true
+                ? "Italo segnala un'anomalia sulla circolazione di questo treno." : nil,
+            stops: stops,
+            dataUpdatedAt: TrainJourney.italoUpdate(r.lastUpdate)
         )
+    }
+
+    /// `LastUpdate` di Italo: formato non documentato, proviamo i più comuni.
+    private static func italoUpdate(_ value: String?) -> Date? {
+        guard let value = value?.trimmingCharacters(in: .whitespaces), !value.isEmpty else { return nil }
+        if let d = ISO8601DateFormatter().date(from: value) { return d }
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = TrainJourney.rome
+        for format in ["yyyy-MM-dd'T'HH:mm:ss.SSS", "yyyy-MM-dd'T'HH:mm:ss", "dd/MM/yyyy HH:mm:ss", "dd/MM/yyyy HH:mm"] {
+            f.dateFormat = format
+            if let d = f.date(from: value) { return d }
+        }
+        return nil
     }
 }
 
@@ -322,6 +379,12 @@ extension TrainJourney {
             }
         }
 
+        let cancelled = solution.cancelled == true
+        // Effettuate fino all'ultima con un orario reale.
+        let passedFlags = TrainJourney.passedUpTo(passes.map {
+            $0.actualData?.depActualTime != nil || $0.actualData?.arrActualTime != nil
+        })
+
         let stops: [TrainStop] = passes.enumerated().map { index, p in
             let isFirst = index == 0
             let isLast = index == passes.count - 1
@@ -344,9 +407,10 @@ extension TrainJourney {
                 estimatedDeparture: schedDep?.addingTimeInterval(delaySeconds),
                 platform: p.platform,
                 platformConfirmed: confirmed,
-                isPassed: actual?.depActualTime != nil || actual?.arrActualTime != nil,
+                isPassed: passedFlags[index],
                 isFirst: isFirst,
-                isLast: isLast
+                isLast: isLast,
+                isCancelled: cancelled
             )
         }
 
@@ -362,7 +426,10 @@ extension TrainJourney {
             delayMinutes: Int(delaySeconds / 60),
             lastDetectionStation: nil,
             lastDetectionTime: nil,
-            stops: stops
+            // `cancelled` era decodificato ma ignorato: il treno sembrava regolare.
+            notice: cancelled ? "Treno soppresso." : nil,
+            stops: stops,
+            isCancelled: cancelled
         )
     }
 }
@@ -371,11 +438,22 @@ extension TrainJourney {
 
 extension TrainJourney {
 
+    /// Gli orari dei vettori sono italiani: vanno letti e mostrati nel fuso di Roma
+    /// anche se l'iPhone è impostato su un altro fuso.
+    static let rome = TimeZone(identifier: "Europe/Rome") ?? .current
+
+    /// Segna come effettuate tutte le fermate fino all'ultima rilevata.
+    static func passedUpTo(_ reached: [Bool]) -> [Bool] {
+        guard let last = reached.lastIndex(of: true) else { return reached.map { _ in false } }
+        return reached.indices.map { $0 <= last }
+    }
+
     // Formati fissi: serve la locale POSIX, altrimenti con l'orologio a 12 ore nelle impostazioni dell'iPhone il
     // parsing di "HH:mm" può fallire.
     private static let hmFormatter: DateFormatter = {
         let f = DateFormatter()
         f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = rome
         f.dateFormat = "HH:mm"
         return f
     }()
@@ -383,6 +461,7 @@ extension TrainJourney {
     private static let hmsFormatter: DateFormatter = {
         let f = DateFormatter()
         f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = rome
         f.dateFormat = "HH:mm:ss"
         return f
     }()

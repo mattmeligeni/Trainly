@@ -2,7 +2,8 @@
 //  ReportSheet.swift
 //  Trainly
 //
-//  Modali di segnalazione (WIP: l'invio verrà implementato più avanti).
+//  Modali di segnalazione. Senza un backend, il testo compilato si invia con il
+//  menu di condivisione (Mail, Messaggi…), così non va perso.
 //
 
 internal import SwiftUI
@@ -35,10 +36,12 @@ struct TrainReportView: View {
                         .lineLimit(4...8)
                 }
                 Section {
-                    Button("Invia segnalazione") { }
-                        .disabled(true)
+                    ShareLink(item: reportText, subject: Text("Segnalazione treno \(number)")) {
+                        Label("Invia segnalazione", systemImage: "paperplane")
+                    }
+                    .disabled(message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 } footer: {
-                    Text("Invio non ancora disponibile: funzionalità in arrivo.")
+                    Text("Si apre il menu di condivisione: scegli Mail o un'altra app.")
                 }
             }
             .navigationTitle("Segnalazione")
@@ -50,6 +53,10 @@ struct TrainReportView: View {
             }
         }
         .modalKeyboardSafe()
+    }
+
+    private var reportText: String {
+        "Segnalazione Trainly\nTreno: \(number)\nTratta: \(route)\nProblema: \(type)\n\n\(message)"
     }
 }
 
@@ -101,10 +108,12 @@ struct GeneralReportView: View {
                         .lineLimit(4...8)
                 }
                 Section {
-                    Button("Invia segnalazione") { }
-                        .disabled(true)
+                    ShareLink(item: reportText, subject: Text("Segnalazione Trainly")) {
+                        Label("Invia segnalazione", systemImage: "paperplane")
+                    }
+                    .disabled(message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 } footer: {
-                    Text("Invio non ancora disponibile: funzionalità in arrivo.")
+                    Text("Si apre il menu di condivisione: scegli Mail o un'altra app.")
                 }
             }
             .navigationTitle("Segnalazioni")
@@ -116,6 +125,15 @@ struct GeneralReportView: View {
             }
         }
         .modalKeyboardSafe()
+    }
+
+    private var reportText: String {
+        switch kind {
+        case .treno:
+            return "Segnalazione Trainly (treno)\nTreno: \(number)\nTratta: \(route)\n\n\(message)"
+        case .ricerca:
+            return "Segnalazione Trainly (ricerca)\nVettore: \(vector)\n\n\(message)"
+        }
     }
 }
 

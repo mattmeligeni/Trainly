@@ -7,6 +7,10 @@ struct TrenitaliaResponse: Codable {
     let oraUltimoRilevamento: Int?
     let stazioneUltimoRilevamento: String?   // null se il treno non è ancora partito
     let hasProvvedimenti: Bool?
+    // Soppressioni: tipoTreno "ST" = soppresso, "PP"/"SI"/"SF" = parzialmente soppresso;
+    // provvedimento 1 = soppresso, 2 = parzialmente soppresso.
+    let tipoTreno: String?
+    let provvedimento: Int?
     let descOrientamento: [String]?
     let compOrientamento: [String]?     // composizione carrozze, es. "Executive in coda"
     let compNumeroTreno: String?        // es. " FR 8509" -> categoria + numero
@@ -20,6 +24,7 @@ struct TrenitaliaResponse: Codable {
 }
 
 struct TrenitaliaFermata: Codable {
+    let id: String?            // codice stazione ViaggiaTreno, es. "S01700"
     let orientamento: String?   // null su regionali/intercity senza composizione
     let stazione: String?
     let programmata: Int?
@@ -32,7 +37,7 @@ struct TrenitaliaFermata: Codable {
     let partenzaReale: Int?
     let ritardoArrivo: Int?
     let ritardoPartenza: Int?
-    let actualFermataType: Int?   // 2 = fermata straordinaria
+    let actualFermataType: Int?   // 2 = fermata straordinaria, 3 = fermata soppressa
     let binarioEffettivoArrivoDescrizione: String?
     let binarioProgrammatoArrivoDescrizione: String?
     let binarioEffettivoPartenzaDescrizione: String?

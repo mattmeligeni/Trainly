@@ -27,8 +27,25 @@ enum ChangesFilter: String, CaseIterable, Identifiable {
     }
 }
 
+extension ChangesFilter {
+    /// Il primo filtro più largo di questo che mostra almeno una delle soluzioni
+    /// (per il pulsante "Mostra con cambi"); nil se nessuno basta.
+    func widened(toShow solutions: [TicketSolution]) -> ChangesFilter? {
+        ChangesFilter.allCases.first { wider in
+            wider.maxChanges > maxChanges && solutions.contains { $0.changes <= wider.maxChanges }
+        }
+    }
+
+    /// Soluzioni escluse da questo filtro ma visibili allargandolo.
+    func hiddenCount(in solutions: [TicketSolution]) -> Int {
+        let widest = ChangesFilter.allCases.map(\.maxChanges).max() ?? maxChanges
+        return solutions.filter { $0.changes > maxChanges && $0.changes <= widest }.count
+    }
+}
+
 enum TicketSort: String, CaseIterable, Identifiable {
     case priceAsc = "Prezzo crescente", priceDesc = "Prezzo decrescente", duration = "Durata"
+    case departure = "Partenza"
     var id: String { rawValue }
 }
 
@@ -36,16 +53,76 @@ extension Array where Element == TicketSolution {
     /// Applica filtro sui cambi e ordinamento; le soluzioni senza prezzo/durata
     /// finiscono in fondo.
     func filteredSorted(changes: ChangesFilter, sort: TicketSort) -> [TicketSolution] {
-        var result = filter { $0.changes <= changes.maxChanges }
-        switch sort {
-        case .priceAsc:
-            result.sort { ($0.minPrice ?? .greatestFiniteMagnitude) < ($1.minPrice ?? .greatestFiniteMagnitude) }
-        case .priceDesc:
-            result.sort { ($0.minPrice ?? -1) > ($1.minPrice ?? -1) }
-        case .duration:
-            result.sort { ($0.durationMinutes ?? .max) < ($1.durationMinutes ?? .max) }
+        filter { $0.changes <= changes.maxChanges }.sorted { a, b in
+            switch sort {
+            case .priceAsc:
+                let (pa, pb) = (a.minPrice ?? .greatestFiniteMagnitude, b.minPrice ?? .greatestFiniteMagnitude)
+                if pa != pb { return pa < pb }
+            case .priceDesc:
+                let (pa, pb) = (a.minPrice ?? -1, b.minPrice ?? -1)
+                if pa != pb { return pa > pb }
+            case .duration:
+                let (da, db) = (a.durationMinutes ?? .max, b.durationMinutes ?? .max)
+                if da != db { return da < db }
+            case .departure:
+                break
+            }
+            // A parità (o con "Partenza") decide l'orario: l'ordine resta stabile
+            // anche quando "Mostra successivi" aggiunge soluzioni.
+            if a.departureSortKey != b.departureSortKey { return a.departureSortKey < b.departureSortKey }
+            return (a.minPrice ?? .greatestFiniteMagnitude) < (b.minPrice ?? .greatestFiniteMagnitude)
         }
-        return result
+    }
+}
+
+// MARK: - Fuso orario
+
+/// Date e orari dei biglietti sempre nel fuso italiano: con l'iPhone in un altro
+/// fuso la ricerca chiederebbe il giorno o l'ora sbagliati.
+enum TicketClock {
+    static let timeZone = TimeZone(identifier: "Europe/Rome") ?? .current
+
+    static var calendar: Calendar {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = timeZone
+        return cal
+    }
+
+    /// Il fuso del dispositivo è diverso da quello italiano (per avvisare l'utente).
+    static var deviceDiffers: Bool {
+        TimeZone.current.secondsFromGMT() != timeZone.secondsFromGMT()
+    }
+}
+
+// MARK: - Errori di ricerca
+
+/// Esito negativo tipizzato: un errore di rete non deve sembrare "nessuna soluzione".
+enum TicketSearchError: Error {
+    case offline
+    case server
+    /// Il vettore non serve la tratta: messaggio già pronto per l'utente.
+    case notServed(String)
+
+    init(_ error: Error) {
+        if let e = error as? TicketSearchError { self = e; return }
+        if let url = error as? URLError {
+            switch url.code {
+            case .notConnectedToInternet, .networkConnectionLost, .dataNotAllowed,
+                 .timedOut, .cannotFindHost, .cannotConnectToHost, .internationalRoamingOff:
+                self = .offline
+                return
+            default: break
+            }
+        }
+        self = .server
+    }
+
+    var message: String {
+        switch self {
+        case .offline: return "Connessione assente o troppo lenta."
+        case .server: return "Il servizio non ha risposto correttamente."
+        case .notServed(let text): return text
+        }
     }
 }
 
@@ -71,12 +148,36 @@ enum TicketDuration {
 /// Nome stazione normalizzato per il confronto tra cataloghi di vettori diversi
 /// (Trenitalia "Milano Centrale" ↔ Trenord "MILANO CENTRALE" ↔ Italo "Milano
 /// Centrale"): maiuscolo, senza accenti e con spazi/punteggiatura ridotti.
-func normalizedStationName(_ s: String) -> String {
+// `nonisolated`: usata anche dal parsing dei cataloghi fuori dal main actor.
+nonisolated func normalizedStationName(_ s: String) -> String {
     let folded = s.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
     let cleaned = folded.uppercased().unicodeScalars.map { scalar -> Character in
         CharacterSet.alphanumerics.contains(scalar) ? Character(scalar) : " "
     }
     return String(cleaned).split(separator: " ").joined(separator: " ")
+}
+
+/// Chiave per il confronto stretto dei nomi fra cataloghi: come
+/// `normalizedStationName`, senza la parte fra parentesi e con le abbreviazioni
+/// comuni uniformate ("San"/"S.", "C"/"Centrale"). Due stazioni corrispondono
+/// solo se le chiavi sono uguali: meglio "non servita" che una stazione sbagliata.
+nonisolated func stationMatchKey(_ s: String) -> String {
+    let aliases = ["SAN": "S", "SANTA": "S", "SANTO": "S", "SANT": "S", "C": "CENTRALE"]
+    return normalizedStationName(stationNameWithoutParentheses(s))
+        .split(separator: " ")
+        .map { aliases[String($0)] ?? String($0) }
+        .joined(separator: " ")
+}
+
+/// "Milano ( Tutte Le Stazioni )" -> "Milano".
+nonisolated func stationNameWithoutParentheses(_ s: String) -> String {
+    guard let open = s.firstIndex(of: "(") else { return s.trimmingCharacters(in: .whitespaces) }
+    return String(s[..<open]).trimmingCharacters(in: .whitespaces)
+}
+
+/// Stazione "( Tutte Le Stazioni )" di lefrecce/cruscotto.
+nonisolated func isMultistationName(_ s: String) -> Bool {
+    normalizedStationName(s).contains("TUTTE")
 }
 
 // MARK: - Stazione (locations/search)
@@ -186,8 +287,32 @@ struct TicketSolution: Identifiable {
     let co2: String?
     var carrier: TicketCarrier = .trenitalia
     var durationMinutes: Int? = nil
+    /// Passeggeri compresi nel prezzo (Trenitalia e Italo danno il totale).
+    var passengers: Int = 1
+    /// Prezzo per una persona (Trenord: la ricerca non ha passeggeri).
+    var pricePerPerson = false
 
     var isSaleable: Bool { status == "SALEABLE" }
+
+    /// "Diretto", "1 cambio", "2 cambi".
+    var changesText: String {
+        switch changes {
+        case 0: return "Diretto"
+        case 1: return "1 cambio"
+        default: return "\(changes) cambi"
+        }
+    }
+
+    /// Cosa copre il prezzo mostrato; nil se è ovvio (un passeggero).
+    var priceScopeText: String? {
+        if pricePerPerson { return "a persona" }
+        return passengers > 1 ? "totale \(passengers) passeggeri" : nil
+    }
+
+    /// "HH:mm" confrontabile; gli orari mancanti vanno in fondo.
+    var departureSortKey: String {
+        departure.first?.isNumber == true ? departure : "~"
+    }
     var hasTrenord: Bool { trains.contains(where: \.isTrenord) }
 
     /// Soluzione composta esclusivamente da treni Trenord: nella lista Trenitalia
@@ -333,7 +458,7 @@ extension TicketSolution {
             minPrice: minPrice,
             messages: messages,
             co2: co2,
-            durationMinutes: info?.duration.flatMap(TicketDuration.minutes)
+            durationMinutes: info?.duration.flatMap { TicketDuration.minutes($0) }
         )
     }
 

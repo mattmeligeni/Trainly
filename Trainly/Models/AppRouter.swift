@@ -9,7 +9,8 @@ internal import Combine
 internal import SwiftUI
 
 /// Corsa Trenitalia esatta (dai link infomobilità): origine + numero + data.
-struct ExactTrenitaliaRef: Equatable, Hashable {
+// nonisolated + Sendable: creata dal parsing dell'infomobilità fuori dal main thread.
+nonisolated struct ExactTrenitaliaRef: Equatable, Hashable, Sendable {
     let codOrigine: String
     let numero: String
     let timestamp: Int
@@ -29,6 +30,14 @@ enum UtilityDestination: Hashable {
     case bigliettiTrenord
 }
 
+/// Treno da evidenziare in infomobilità. Origine (codice ViaggiaTreno) e
+/// giorno, se noti, distinguono le corse con lo stesso numero.
+struct PendingInfoTrain: Equatable {
+    let number: String
+    var origin: String? = nil
+    var day: Date? = nil
+}
+
 struct PendingSearch: Equatable {
     let vector: String   // rawValue di `vector`
     let number: String
@@ -39,12 +48,20 @@ struct PendingSearch: Equatable {
 final class AppRouter: ObservableObject {
     @Published var selectedTab: MainTabView.Tab = .board
     @Published var pendingSearch: PendingSearch?
-    @Published var utilityPath: [UtilityDestination] = []
-    @Published var pendingInfoTrain: String?   // treno da evidenziare in infomobilità
+    @Published var utilityPath: [UtilityDestination] = [] {
+        // Uscendo dall'infomobilità il treno aperto da lì non deve ricomparire
+        // alla prossima apertura.
+        didSet { if !utilityPath.contains(.infomobilita), infomobilitaTrain != nil { infomobilitaTrain = nil } }
+    }
+    @Published var pendingInfoTrain: PendingInfoTrain?   // treno da evidenziare in infomobilità
+    /// Treno aperto da un link dell'infomobilità (push nella tab Utilità).
+    /// Sta nel router perché `openInfomobilita` deve poterlo chiudere.
+    @Published var infomobilitaTrain: TrainRequest?
 
     /// Apre l'infomobilità (tab Utilità) evidenziando l'avviso del treno indicato.
-    func openInfomobilita(forTrain number: String) {
-        pendingInfoTrain = number
+    func openInfomobilita(forTrain number: String, origin: String? = nil, day: Date? = nil) {
+        infomobilitaTrain = nil   // torna all'elenco se un treno era già aperto sopra
+        pendingInfoTrain = PendingInfoTrain(number: number, origin: origin, day: day)
         utilityPath = [.infomobilita]
         selectedTab = .info
     }

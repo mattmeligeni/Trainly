@@ -36,7 +36,7 @@ issued from the device.
 - iOS 17.6+ (built and run against the iOS 26 SDK, SwiftUI lifecycle)
 - Xcode with Swift 5
 - No third‑party dependencies; only Apple frameworks (SwiftUI, Foundation,
-  Combine, CommonCrypto)
+  Combine)
 
 App Transport Security: all endpoints are HTTPS except ViaggiaTreno and the MIT
 strike feed, which are reached over HTTP and declared as ATS exception domains in
@@ -92,7 +92,7 @@ orientation label, and an "extraordinary stop" flag.
 | --- | --- | --- |
 | Trenitalia (ViaggiaTreno) | `viaggiatreno.it/.../cercaNumeroTrenoTrenoAutocomplete`, `.../andamentoTreno` | plain text + JSON |
 | Italo | `italoinviaggio.italotreno.com/api/RicercaTrenoService` | JSON |
-| Trenord | `trenord.it/mia/bff/train/{id}` | AES‑256‑ECB encrypted JSON |
+| Trenord | `cloud.mp.trenord.it/train/{number}` (Trenord app API) | JSON |
 | RFI station board | `iechub.rfi.it/ArriviPartenze/ArrivalsDepartures/Monitor` | HTML |
 | Ticketing (Le Frecce BFF) | `lefrecce.it/Channels.Website.BFF.WEB/website/locations/search`, `.../ticket/solutions` | JSON |
 | Trenitalia station catalog | `trenitalia.com/content/trenitalia/it.cruscotto-stations.json` | JSON (ISO‑8859‑1) |
@@ -101,11 +101,12 @@ orientation label, and an "extraordinary stop" flag.
 
 Notable handling:
 
-- **Trenord** responses are encrypted. `TrenordService` derives an AES‑256 key as
-  the SHA‑256 of a fixed passphrase and decrypts the body with CommonCrypto
-  (ECB, PKCS7), then decodes the resulting `[TrenordSolution]` array.
-- **RFI** and **Trenitalia infomobility** are HTML‑scraped with `NSRegularExpression`
-  (dot‑matches‑newlines) because no JSON API exists.
+- **Trenord** live data comes from the Trenord app API, plain JSON with the same `secret` header
+  used for ticket search. The website endpoint (`trenord.it/mia/bff`) returns the same data
+  AES‑encrypted, so it is no longer used.
+- **RFI** and **Trenitalia infomobility** are HTML‑scraped because no JSON API exists:
+  RFI with Swift `Regex` (`dotMatchesNewlines()`), infomobility with `NSRegularExpression`
+  (dot‑matches‑newlines).
 - The **strike feed** is fetched over HTTPS with `Accept-Encoding: identity` to avoid
   a gzip body that URLSession would not transparently decode after the HTTP→HTTPS
   redirect.
@@ -252,12 +253,6 @@ Trainly is an unofficial client and is not affiliated with Trenitalia, Italo,
 Trenord, RFI or the Ministry of Transport. Data is provided as‑is from third‑party
 endpoints and may be inaccurate or unavailable. The ticket feature is for lookup
 only; purchase tickets through official channels or authorized resellers.
-
-## Configuration
-
-The Trenord feed is encrypted. Its passphrase is not part of this repository: copy
-`Trainly/Config/TrenordKey.example.plist` to `Trainly/Config/TrenordKey.plist` (git-ignored) and set the `key`
-value. Without the file the app works normally and Trenord trains are reported as not configured.
 
 ## License
 

@@ -10,7 +10,9 @@ internal import SwiftUI
 struct InfoView: View {
     var body: some View {
         ScrollView {
-            VStack(spacing: 28) {
+            // Larghezza regolare (iPhone Duo aperto, iPad): intestazione a sinistra e
+            // schede a destra, ai lati della piega; su iPhone una colonna come prima.
+            DuoTwoColumns(spacing: 28) {
 
                 // MARK: - Intestazione
                 VStack(spacing: 12) {
@@ -27,6 +29,7 @@ struct InfoView: View {
                 }
                 .padding(.top, 32)
 
+            } trailing: {
                 // MARK: - Card
                 VStack(spacing: 14) {
                     NavigationLink(value: UtilityDestination.biglietti) {
